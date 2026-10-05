@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: ingepro-rp
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: ingepro-rp-db
+          property: connectionString
+      - key: SECRET_KEY
+        generateValue: true
+databases:
+  - name: ingepro-rp-db
+    databaseName: ingepro_rp
+    user: ingepro_rp

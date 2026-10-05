@@ -1,21 +1,18 @@
-# INGEPRO RP - Modelo de prueba v2
+# INGEPRO RP v3
+Prototipo de sistema de reparación y trazabilidad.
 
-MVP de trazabilidad de reparaciones con ingreso por listas maestras.
+## Novedades v3
+- Configuración inicial del Administrador.
+- Inicio/cierre de sesión.
+- Creación de usuarios por el Administrador.
+- Permisos por módulo.
+- Activación/desactivación de usuarios.
+- Contraseñas almacenadas con hash seguro.
+- Auditoría básica de accesos, creación de usuarios y cambios de OT.
+- Mantiene ingreso de equipos con clientes/modelos/componentes en listas.
 
-## Incluye
-- Cliente desde lista desplegable.
-- Bomba/modelo desde lista desplegable.
-- Recepción completa o parcial.
-- Selección múltiple de componentes cuando la bomba no llega completa.
-- OT correlativa automática.
-- Flujo diagnóstico, cotización/aprobación, reparación, calidad, checklist físico, embalaje y despacho.
+## Primer ingreso
+Al desplegar una base de datos nueva, abre la aplicación. El sistema mostrará **Configuración inicial** para crear el primer Administrador. Después esa pantalla queda bloqueada.
 
-## Datos demo iniciales
-Clientes: SQM Nueva Victoria, SQM Salar, Cliente de prueba.
-Modelo: Bomba centrífuga Vogel P204/5.
-Componentes: Eje, Cuerpo de rodamientos, Impulsor, Voluta, Frame adapter.
-
-## Render
-Build: `pip install -r requirements.txt`
-Start: `gunicorn app:app`
-Usar PostgreSQL mediante `DATABASE_URL`.
+## Producción
+Configurar `SECRET_KEY` como variable de entorno en Render y usar PostgreSQL mediante `DATABASE_URL`.

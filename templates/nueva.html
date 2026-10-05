@@ -1,1 +1,48 @@
-{% extends 'base.html' %}{% block c %}<h1>Ingreso de equipo</h1><p>El sistema generará automáticamente la OT de diagnóstico.</p><form method="post" class="panel"><label>Cliente<input name="cliente" required placeholder="Ej. SQM Nueva Victoria"></label><label>Equipo<input name="equipo" required placeholder="Ej. Bomba centrífuga Vogel P204/5"></label><label>Componente<input name="componente" required placeholder="Ej. Bomba completa"></label><label>N° serie<input name="serie"></label><label>Guía / documento de ingreso<input name="guia"></label><button>Generar OT de diagnóstico</button></form>{% endblock %}
+{% extends 'base.html' %}{% block c %}
+<div class="top"><div><h1>Ingreso de equipo</h1><p>Selecciona datos maestros. El sistema generará automáticamente la OT de diagnóstico.</p></div></div>
+<form method="post" class="panel" id="ingresoForm">
+  <label>Cliente
+    <select name="cliente_id" required>
+      <option value="">Seleccionar cliente...</option>
+      {% for c in clientes %}<option value="{{ c.id }}">{{ c.nombre }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Bomba / modelo
+    <select name="modelo_id" id="modelo" required>
+      <option value="">Seleccionar modelo...</option>
+      {% for m in modelos %}<option value="{{ m.id }}">{{ m.tipo }} · {{ m.marca }} · {{ m.modelo }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Condición de recepción
+    <select name="recepcion" id="recepcion" required>
+      <option value="Completa">Bomba completa</option>
+      <option value="Parcial">Recepción parcial / componente(s)</option>
+    </select>
+  </label>
+  <label>N° serie<input name="serie" placeholder="Opcional"></label>
+  <label>Guía / documento de ingreso<input name="guia" placeholder="Ej. Guía 12345"></label>
+  <div class="componentes" id="bloqueComponentes">
+    <b>Componentes recibidos</b>
+    <small>Selecciona el modelo y luego marca solamente las partes que llegaron a INGEPRO.</small>
+    <div id="listaComponentes" class="checks"><span class="muted">Selecciona primero una bomba/modelo.</span></div>
+  </div>
+  <button>Generar OT de diagnóstico</button>
+</form>
+<script>
+const modelo = document.getElementById('modelo');
+const recepcion = document.getElementById('recepcion');
+const bloque = document.getElementById('bloqueComponentes');
+const lista = document.getElementById('listaComponentes');
+function mostrarBloque(){ bloque.style.display = recepcion.value === 'Parcial' ? 'block' : 'none'; }
+async function cargarComponentes(){
+  lista.innerHTML = '<span class="muted">Cargando...</span>';
+  if(!modelo.value){ lista.innerHTML='<span class="muted">Selecciona primero una bomba/modelo.</span>'; return; }
+  const r = await fetch('/api/modelo/' + modelo.value + '/componentes');
+  const datos = await r.json();
+  lista.innerHTML = datos.map(c => `<label class="check"><input type="checkbox" name="componentes" value="${c.nombre}"><span>${c.nombre}</span></label>`).join('');
+}
+recepcion.addEventListener('change', mostrarBloque);
+modelo.addEventListener('change', cargarComponentes);
+mostrarBloque();
+</script>
+{% endblock %}

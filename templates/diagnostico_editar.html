@@ -1,0 +1,11 @@
+{% extends 'base.html' %}{% block c %}
+<div class="pagehead"><div><h1>Editar hallazgo · {{ot.numero}}</h1><p>{{ot.cliente}} · {{ot.equipo}}</p></div><a class="btn" href="{{url_for('diagnostico_ot',ot_id=ot.id)}}">← Volver al diagnóstico</a></div>
+<div class="panel wide"><form method="post" enctype="multipart/form-data" class="diagform">
+<label>Componente<select name="ot_componente_id">{% if not ot.componentes_detalle %}<option value="">Inspección general</option>{% endif %}{% for c in ot.componentes_detalle %}<option value="{{c.id}}" {% if h.ot_componente_id==c.id %}selected{% endif %}>{{c.codigo or ''}}{% if c.codigo %} · {% endif %}{{c.nombre}} — {{c.condicion_ingreso}}</option>{% endfor %}</select></label>
+<label>Zona / punto inspeccionado<input name="zona" value="{{h.zona or ''}}" lang="es" spellcheck="true"></label>
+<label class="wide">Condición encontrada<textarea name="condicion" required lang="es" spellcheck="true">{{h.condicion}}</textarea></label>
+<label class="wide">Trabajo recomendado<textarea name="trabajo_recomendado" lang="es" spellcheck="true">{{h.trabajo_recomendado or ''}}</textarea></label>
+<label>Estado<select name="estado">{% for e in ['Pendiente','Recuperable','No recuperable','Requiere fabricación','Requiere suministro'] %}<option {% if h.estado==e %}selected{% endif %}>{{e}}</option>{% endfor %}</select></label>
+<label>Reemplazar fotografía<input type="file" name="foto" accept="image/*" capture="environment"><small>Déjalo vacío para conservar la actual.</small></label>
+<label class="wide">Observación adicional<textarea name="observacion" lang="es" spellcheck="true">{{h.observacion or ''}}</textarea></label>
+<button class="primary">Guardar cambios</button></form></div>{% endblock %}

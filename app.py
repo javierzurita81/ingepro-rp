@@ -142,12 +142,13 @@ class LineaCotizacion(db.Model):
     orden=db.Column(db.Integer, default=0)
 
 class OT(db.Model):
-    id=db.Column(db.Integer, primary_key=True); numero=db.Column(db.String(30), unique=True, nullable=False); fecha=db.Column(db.DateTime, default=datetime.utcnow)
+    id=db.Column(db.Integer, primary_key=True); modelo_id=db.Column(db.Integer, db.ForeignKey('modelo_equipo.id')); numero=db.Column(db.String(30), unique=True, nullable=False); fecha=db.Column(db.DateTime, default=datetime.utcnow)
     cliente=db.Column(db.String(120), nullable=False); equipo=db.Column(db.String(120), nullable=False); componente=db.Column(db.String(500), nullable=False)
     serie=db.Column(db.String(80)); guia=db.Column(db.String(80)); estado=db.Column(db.String(40), default='Diagnóstico'); diagnostico=db.Column(db.Text)
     cotizacion=db.Column(db.String(80)); aprobacion=db.Column(db.String(30), default='Pendiente'); reparacion=db.Column(db.Text); control_calidad=db.Column(db.Text)
     checklist=db.Column(db.String(120)); embalaje=db.Column(db.Text); despacho=db.Column(db.Text)
     fecha_comprometida=db.Column(db.Date)
+    modelo_equipo=db.relationship('ModeloEquipo')
     componentes_detalle=db.relationship('OTComponente', backref='ot', cascade='all, delete-orphan', lazy=True)
     hallazgos=db.relationship('DiagnosticoHallazgo', backref='ot', cascade='all, delete-orphan', lazy=True, order_by='DiagnosticoHallazgo.id')
     @property
@@ -240,6 +241,7 @@ def asegurar_columnas():
     if 'ot' in insp.get_table_names():
         cols={c['name'] for c in insp.get_columns('ot')}
         if 'fecha_comprometida' not in cols: db.session.execute(text('ALTER TABLE ot ADD COLUMN fecha_comprometida DATE'))
+        if 'modelo_id' not in cols: db.session.execute(text('ALTER TABLE ot ADD COLUMN modelo_id INTEGER'))
     if 'cliente' in insp.get_table_names():
         cols={c['name'] for c in insp.get_columns('cliente')}
         defs={'nombre_comercial':'VARCHAR(120)','rut':'VARCHAR(20)','direccion':'VARCHAR(200)','comuna':'VARCHAR(100)','ciudad':'VARCHAR(100)','giro':'VARCHAR(180)','telefono':'VARCHAR(60)','email':'VARCHAR(140)'}
@@ -329,7 +331,7 @@ def nueva_ot():
     if request.method=='POST':
         cliente=db.session.get(Cliente,int(request.form['cliente_id'])) or abort(404); modelo=db.session.get(ModeloEquipo,int(request.form['modelo_id'])) or abort(404)
         recibidos=set(request.form.getlist('componentes_recibidos'))
-        ot=OT(numero=next_number(),cliente=cliente.nombre,equipo=f'{modelo.tipo} {modelo.marca} {modelo.modelo}',componente='Pendiente detalle',serie=request.form.get('serie'),guia=request.form.get('guia'))
+        ot=OT(numero=next_number(),modelo_id=modelo.id,cliente=cliente.nombre,equipo=f'{modelo.tipo} {modelo.marca} {modelo.modelo}',componente='Pendiente detalle',serie=request.form.get('serie'),guia=request.form.get('guia'))
         db.session.add(ot); db.session.flush()
         nombres=[]
         for c in modelo.componentes:
@@ -340,6 +342,42 @@ def nueva_ot():
         ot.componente=', '.join(nombres) if nombres else 'Sin componentes marcados como recibidos'
         db.session.commit(); audit('OT creada',ot.numero); flash(f'{ot.numero} creada correctamente'); return redirect(url_for('ver_ot',ot_id=ot.id))
     return render_template('nueva.html',clientes=clientes,modelos=modelos)
+def cargar_despiece_ot(ot, modelo):
+    if ot.componentes_detalle:
+        return 0
+    ot.modelo_id=modelo.id
+    creados=0
+    for c in modelo.componentes:
+        if c.activo is False: continue
+        db.session.add(OTComponente(ot_id=ot.id,componente_modelo_id=c.id,nombre=c.nombre,codigo=c.codigo,categoria=c.categoria or 'Componente reparable',condicion_ingreso='No recibido',material=c.material_default))
+        creados += 1
+    return creados
+
+def inferir_modelo_ot(ot):
+    if ot.modelo_id:
+        return db.session.get(ModeloEquipo,ot.modelo_id)
+    texto=(ot.equipo or '').lower()
+    candidatos=ModeloEquipo.query.filter_by(activo=True).all()
+    for m in candidatos:
+        if m.marca.lower() in texto and m.modelo.lower() in texto:
+            return m
+    return None
+
+@app.route('/ot/<int:ot_id>/cargar-despiece',methods=['POST'])
+@permiso_required('ingreso')
+def ot_cargar_despiece(ot_id):
+    ot=db.session.get(OT,ot_id) or abort(404)
+    if ot.componentes_detalle:
+        flash('Esta OT ya tiene un despiece cargado.'); return redirect(url_for('ver_ot',ot_id=ot.id))
+    mid=request.form.get('modelo_id')
+    modelo=db.session.get(ModeloEquipo,int(mid)) if mid else inferir_modelo_ot(ot)
+    if not modelo:
+        flash('Selecciona el modelo de bomba para cargar su despiece.'); return redirect(url_for('ver_ot',ot_id=ot.id))
+    n=cargar_despiece_ot(ot,modelo)
+    db.session.commit(); audit('Despiece cargado en OT',f'{ot.numero} / {modelo.marca} {modelo.modelo} / {n} componentes')
+    flash(f'Despiece {modelo.marca} {modelo.modelo} cargado: {n} componentes. Marca ahora qué elementos fueron recibidos.')
+    return redirect(url_for('ver_ot',ot_id=ot.id))
+
 @app.route('/ot/<int:ot_id>',methods=['GET','POST'])
 @login_required
 def ver_ot(ot_id):
@@ -353,7 +391,12 @@ def ver_ot(ot_id):
             c.material=request.form.get(f'material_{c.id}',c.material or '').strip()
             c.ubicacion=request.form.get(f'ubicacion_{c.id}',c.ubicacion or '').strip()
         db.session.commit(); audit('OT actualizada',ot.numero); flash('OT actualizada'); return redirect(url_for('ver_ot',ot_id=ot.id))
-    return render_template('ot.html',ot=ot)
+    if not ot.componentes_detalle:
+        modelo=inferir_modelo_ot(ot)
+        if modelo:
+            cargar_despiece_ot(ot,modelo); db.session.commit()
+    modelos=ModeloEquipo.query.filter_by(activo=True).order_by(ModeloEquipo.tipo,ModeloEquipo.marca,ModeloEquipo.modelo).all()
+    return render_template('ot.html',ot=ot,modelos=modelos)
 
 
 @app.route('/ot/<int:ot_id>/diagnostico', methods=['GET','POST'])
@@ -379,6 +422,28 @@ def diagnostico_foto(hid):
     h=db.session.get(DiagnosticoHallazgo,hid) or abort(404)
     if not h.foto_datos: abort(404)
     return send_file(BytesIO(h.foto_datos),mimetype=h.foto_mime or 'image/jpeg',download_name=h.foto_nombre or f'hallazgo-{h.id}.jpg')
+
+@app.route('/diagnostico/hallazgo/<int:hid>/editar',methods=['GET','POST'])
+@permiso_required('diagnostico')
+def diagnostico_editar(hid):
+    h=db.session.get(DiagnosticoHallazgo,hid) or abort(404)
+    ot=h.ot
+    if request.method=='POST':
+        comp_id=request.form.get('ot_componente_id')
+        comp=db.session.get(OTComponente,int(comp_id)) if comp_id else None
+        if comp and comp.ot_id!=ot.id: abort(400)
+        condicion=request.form.get('condicion','').strip()
+        if not condicion:
+            flash('Debes indicar la condición encontrada.'); return redirect(url_for('diagnostico_editar',hid=h.id))
+        h.ot_componente_id=comp.id if comp else None
+        h.zona=request.form.get('zona','').strip(); h.condicion=condicion
+        h.trabajo_recomendado=request.form.get('trabajo_recomendado','').strip(); h.observacion=request.form.get('observacion','').strip(); h.estado=request.form.get('estado','Pendiente')
+        if request.files.get('foto') and request.files['foto'].filename:
+            nombre,mime,datos=preparar_foto(request.files.get('foto'))
+            if datos: h.foto_nombre=nombre; h.foto_mime=mime; h.foto_datos=datos
+        db.session.commit(); audit('Hallazgo diagnóstico editado',f'{ot.numero} / Hallazgo {h.id}')
+        flash('Hallazgo actualizado.'); return redirect(url_for('diagnostico_ot',ot_id=ot.id))
+    return render_template('diagnostico_editar.html',ot=ot,h=h)
 
 @app.route('/diagnostico/hallazgo/<int:hid>/eliminar',methods=['POST'])
 @permiso_required('diagnostico')

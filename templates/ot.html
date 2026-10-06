@@ -4,7 +4,7 @@
 {% if usuario_actual.puede('cotizaciones') %}
 <div class="card quote-action">
   <div><h2>Cotización vinculada a esta OT</h2><p>{% if ot.cotizacion %}Cotización actual: <b>{{ot.cotizacion}}</b>{% else %}Cuando el diagnóstico esté listo, genera el presupuesto directamente desde esta OT.{% endif %}</p></div>
-  <a class="btn primary" href="{{url_for('cotizacion_nueva',ot_id=ot.id)}}">+ Crear cotización desde esta OT</a>
+  {% set activa = cotizacion_activa_ot(ot.id) %}{% if activa %}<a class="btn primary" href="{{url_for('ver_cotizacion',qid=activa.id)}}">Ver / Editar cotización</a>{% else %}<a class="btn primary" href="{{url_for('cotizacion_nueva',ot_id=ot.id)}}">+ Crear cotización desde esta OT</a>{% endif %}
 </div>
 {% endif %}
 <form method="post" class="panel wide">

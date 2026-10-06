@@ -1,9 +1,15 @@
 import os, json
 from datetime import datetime, date, timedelta
 from functools import wraps
-from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session, abort
+from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session, abort, send_file
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
+from io import BytesIO
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_RIGHT
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY','cambiar-esta-clave-en-produccion')
@@ -65,14 +71,22 @@ class Cotizacion(db.Model):
     referencia=db.Column(db.String(120))
     notas=db.Column(db.Text)
     estado=db.Column(db.String(30), default='Presupuesto')
+    descuento_pct=db.Column(db.Float, default=0)
+    anulada_motivo=db.Column(db.Text)
+    anulada_fecha=db.Column(db.DateTime)
+    anulada_por=db.Column(db.String(120))
     creada_por=db.Column(db.String(120))
     lineas=db.relationship('LineaCotizacion', backref='cotizacion', cascade='all, delete-orphan', lazy=True)
     @property
     def subtotal(self): return sum((l.cantidad or 0)*(l.precio_unitario or 0) for l in self.lineas)
     @property
-    def iva(self): return round(self.subtotal*0.19)
+    def descuento(self): return round(self.subtotal * max(0, min(self.descuento_pct or 0, 100)) / 100)
     @property
-    def total(self): return self.subtotal+self.iva
+    def neto(self): return self.subtotal-self.descuento
+    @property
+    def iva(self): return round(self.neto*0.19)
+    @property
+    def total(self): return self.neto+self.iva
 
 class LineaCotizacion(db.Model):
     id=db.Column(db.Integer, primary_key=True)
@@ -97,7 +111,7 @@ class OT(db.Model):
 
 def usuario_actual(): return db.session.get(Usuario, session.get('user_id')) if session.get('user_id') else None
 @app.context_processor
-def inject_user(): return dict(usuario_actual=usuario_actual(), PERMISOS=PERMISOS)
+def inject_user(): return dict(usuario_actual=usuario_actual(), PERMISOS=PERMISOS, cotizacion_activa_ot=lambda ot_id: Cotizacion.query.filter(Cotizacion.ot_id==ot_id, Cotizacion.estado!='Anulada').order_by(Cotizacion.id.desc()).first())
 
 def login_required(fn):
     @wraps(fn)
@@ -149,7 +163,8 @@ def asegurar_columnas():
         cols={c['name'] for c in insp.get_columns('cotizacion')}
         defs={
           'plazo_ejecucion_cantidad':'INTEGER', 'plazo_ejecucion_unidad':'VARCHAR(30)',
-          'inicio_plazo':'VARCHAR(120)', 'fecha_aprobacion':'TIMESTAMP', 'fecha_comprometida':'DATE'}
+          'inicio_plazo':'VARCHAR(120)', 'fecha_aprobacion':'TIMESTAMP', 'fecha_comprometida':'DATE',
+          'descuento_pct':'FLOAT', 'anulada_motivo':'TEXT', 'anulada_fecha':'TIMESTAMP', 'anulada_por':'VARCHAR(120)'}
         for n,t in defs.items():
             if n not in cols: db.session.execute(text(f'ALTER TABLE cotizacion ADD COLUMN {n} {t}'))
     if 'ot' in insp.get_table_names():
@@ -237,6 +252,26 @@ def ver_ot(ot_id):
     return render_template('ot.html',ot=ot)
 
 
+def cotizacion_activa_ot(ot_id):
+    return Cotizacion.query.filter(Cotizacion.ot_id==ot_id, Cotizacion.estado!='Anulada').order_by(Cotizacion.id.desc()).first()
+
+def cargar_cotizacion_form(q, form):
+    q.contacto=form.get('contacto','').strip(); q.plazo_pago=form.get('plazo_pago','30 días').strip()
+    q.referencia=form.get('referencia','').strip(); q.notas=form.get('notas','').strip()
+    q.plazo_ejecucion_cantidad=int(form.get('plazo_ejecucion_cantidad') or 0)
+    q.plazo_ejecucion_unidad=form.get('plazo_ejecucion_unidad','Días hábiles')
+    q.inicio_plazo=form.get('inicio_plazo','Recepción de OC / aprobación').strip()
+    try: q.descuento_pct=max(0,min(float(form.get('descuento_pct') or 0),100))
+    except: q.descuento_pct=0
+    vh=form.get('validez_hasta'); q.validez_hasta=datetime.strptime(vh,'%Y-%m-%d').date() if vh else None
+    q.lineas.clear(); db.session.flush()
+    descs=form.getlist('descripcion[]'); cants=form.getlist('cantidad[]'); precios=form.getlist('precio[]')
+    for i,desc in enumerate(descs):
+        if not desc.strip(): continue
+        try: cant=float(cants[i] or 1); precio=int(float(precios[i] or 0))
+        except: cant,precio=1,0
+        q.lineas.append(LineaCotizacion(descripcion=desc.strip(),cantidad=cant,precio_unitario=precio,orden=i))
+
 @app.route('/cotizaciones')
 @permiso_required('cotizaciones')
 def cotizaciones():
@@ -247,31 +282,19 @@ def cotizaciones():
 @permiso_required('cotizaciones')
 def cotizacion_nueva(ot_id):
     ot=db.session.get(OT,ot_id) or abort(404)
+    activa=cotizacion_activa_ot(ot.id)
+    if activa:
+        flash(f'Esta OT ya tiene una cotización activa: {activa.numero}.')
+        return redirect(url_for('ver_cotizacion',qid=activa.id))
     if request.method=='POST':
-        from datetime import date
-        q=Cotizacion(numero=next_quote_number(), ot_id=ot.id, cliente=ot.cliente,
-            contacto=request.form.get('contacto','').strip(), plazo_pago=request.form.get('plazo_pago','30 días').strip(),
-            tiempo_entrega=request.form.get('tiempo_entrega','').strip(), referencia=request.form.get('referencia','').strip(),
-            plazo_ejecucion_cantidad=int(request.form.get('plazo_ejecucion_cantidad') or 0),
-            plazo_ejecucion_unidad=request.form.get('plazo_ejecucion_unidad','Días hábiles'),
-            inicio_plazo=request.form.get('inicio_plazo','Recepción de OC / aprobación').strip(),
-            notas=request.form.get('notas','').strip(), creada_por=usuario_actual().nombre)
-        vh=request.form.get('validez_hasta')
-        if vh: q.validez_hasta=datetime.strptime(vh,'%Y-%m-%d').date()
-        db.session.add(q); db.session.flush()
-        descs=request.form.getlist('descripcion[]'); cants=request.form.getlist('cantidad[]'); precios=request.form.getlist('precio[]')
-        for i,desc in enumerate(descs):
-            if not desc.strip(): continue
-            try: cant=float(cants[i] or 1); precio=int(float(precios[i] or 0))
-            except: cant,precio=1,0
-            db.session.add(LineaCotizacion(cotizacion_id=q.id,descripcion=desc.strip(),cantidad=cant,precio_unitario=precio,orden=i))
-        db.session.commit(); ot.cotizacion=q.numero; ot.estado='Cotización enviada' if request.form.get('accion')=='enviar' else 'Diagnóstico';
-        if request.form.get('accion')=='enviar': q.estado='Presupuesto enviado'
-        db.session.commit(); audit('Cotización creada',f'{q.numero} / {ot.numero}'); flash(f'{q.numero} creada correctamente'); return redirect(url_for('ver_cotizacion',qid=q.id))
-    sugerencias=[]
-    if ot.componente and ot.componente!='Bomba completa': sugerencias=[f'REPARACIÓN {x.strip().upper()}' for x in ot.componente.split(',')]
-    elif ot.componente=='Bomba completa': sugerencias=['REPARACIÓN BOMBA COMPLETA']
-    return render_template('cotizacion_form.html',ot=ot,sugerencias=sugerencias)
+        q=Cotizacion(numero=next_quote_number(),ot_id=ot.id,cliente=ot.cliente,creada_por=usuario_actual().nombre)
+        cargar_cotizacion_form(q,request.form); db.session.add(q); db.session.commit()
+        ot.cotizacion=q.numero
+        if request.form.get('accion')=='enviar': q.estado='Presupuesto enviado'; ot.estado='Cotización enviada'
+        db.session.commit(); audit('Cotización creada',f'{q.numero} / {ot.numero}'); flash(f'{q.numero} creada correctamente')
+        return redirect(url_for('ver_cotizacion',qid=q.id))
+    sugerencias=[f'REPARACIÓN {x.strip().upper()}' for x in ot.componente.split(',')] if ot.componente and ot.componente!='Bomba completa' else ['REPARACIÓN BOMBA COMPLETA']
+    return render_template('cotizacion_form.html',ot=ot,sugerencias=sugerencias,q=None,modo='nueva')
 
 @app.route('/cotizacion/<int:qid>')
 @permiso_required('cotizaciones')
@@ -279,10 +302,33 @@ def ver_cotizacion(qid):
     q=db.session.get(Cotizacion,qid) or abort(404)
     return render_template('cotizacion_ver.html',q=q,ot=db.session.get(OT,q.ot_id))
 
+@app.route('/cotizacion/<int:qid>/editar',methods=['GET','POST'])
+@permiso_required('cotizaciones')
+def editar_cotizacion(qid):
+    q=db.session.get(Cotizacion,qid) or abort(404); ot=db.session.get(OT,q.ot_id)
+    if q.estado=='Anulada': flash('Una cotización anulada no puede modificarse.'); return redirect(url_for('ver_cotizacion',qid=q.id))
+    if request.method=='POST':
+        cargar_cotizacion_form(q,request.form)
+        if request.form.get('accion')=='enviar': q.estado='Presupuesto enviado'; ot.estado='Cotización enviada'
+        db.session.commit(); audit('Cotización editada',q.numero); flash('Cotización actualizada correctamente.')
+        return redirect(url_for('ver_cotizacion',qid=q.id))
+    return render_template('cotizacion_form.html',ot=ot,sugerencias=[],q=q,modo='editar')
+
+@app.route('/cotizacion/<int:qid>/anular',methods=['POST'])
+@permiso_required('cotizaciones')
+def anular_cotizacion(qid):
+    q=db.session.get(Cotizacion,qid) or abort(404); motivo=request.form.get('motivo','').strip()
+    if not motivo: flash('Debes indicar el motivo de anulación.'); return redirect(url_for('ver_cotizacion',qid=q.id))
+    q.estado='Anulada'; q.anulada_motivo=motivo; q.anulada_fecha=datetime.utcnow(); q.anulada_por=usuario_actual().nombre
+    ot=db.session.get(OT,q.ot_id); ot.cotizacion=None; ot.aprobacion='Pendiente'
+    db.session.commit(); audit('Cotización anulada',f'{q.numero}: {motivo}'); flash(f'{q.numero} quedó ANULADA. Ya puedes crear una nueva cotización para la OT.')
+    return redirect(url_for('ver_ot',ot_id=ot.id))
+
 @app.route('/cotizacion/<int:qid>/estado', methods=['POST'])
 @permiso_required('cotizaciones')
 def cotizacion_estado(qid):
     q=db.session.get(Cotizacion,qid) or abort(404); nuevo=request.form.get('estado')
+    if q.estado=='Anulada': return redirect(url_for('ver_cotizacion',qid=q.id))
     if nuevo in ['Presupuesto','Presupuesto enviado','Aprobada','Rechazada']:
         q.estado=nuevo; ot=db.session.get(OT,q.ot_id)
         if nuevo=='Aprobada':
@@ -291,6 +337,29 @@ def cotizacion_estado(qid):
         elif nuevo=='Presupuesto enviado': ot.estado='Cotización enviada'
         db.session.commit(); audit('Estado cotización',f'{q.numero}: {nuevo}')
     return redirect(url_for('ver_cotizacion',qid=q.id))
+
+@app.route('/cotizacion/<int:qid>/pdf')
+@permiso_required('cotizaciones')
+def cotizacion_pdf(qid):
+    q=db.session.get(Cotizacion,qid) or abort(404); ot=db.session.get(OT,q.ot_id)
+    buf=BytesIO(); doc=SimpleDocTemplate(buf,pagesize=A4,rightMargin=28,leftMargin=28,topMargin=28,bottomMargin=28)
+    styles=getSampleStyleSheet(); story=[]
+    title=ParagraphStyle('t',parent=styles['Title'],fontSize=22,textColor=colors.HexColor('#0b6596'),alignment=TA_RIGHT)
+    story += [Paragraph('<b>INGEPRO</b><br/><font size="10">División Maestranza · Ingeniería y Servicios</font>',styles['Heading1']), Paragraph(f'Presupuesto # {q.numero}',title), Spacer(1,12)]
+    meta=[[Paragraph('<b>Cliente</b>',styles['BodyText']),q.cliente],[Paragraph('<b>OT</b>',styles['BodyText']),ot.numero],[Paragraph('<b>Equipo</b>',styles['BodyText']),ot.equipo],[Paragraph('<b>Fecha</b>',styles['BodyText']),q.fecha.strftime('%d/%m/%Y')],[Paragraph('<b>Validez</b>',styles['BodyText']),q.validez_hasta.strftime('%d/%m/%Y') if q.validez_hasta else '-'],[Paragraph('<b>Tiempo de ejecución</b>',styles['BodyText']),f'{q.plazo_ejecucion_cantidad or "-"} {q.plazo_ejecucion_unidad or ""}']]
+    mt=Table(meta,colWidths=[120,390]); mt.setStyle(TableStyle([('GRID',(0,0),(-1,-1),.4,colors.lightgrey),('BACKGROUND',(0,0),(0,-1),colors.HexColor('#eef3f7')),('PADDING',(0,0),(-1,-1),6)])); story += [mt,Spacer(1,14)]
+    data=[['DESCRIPCIÓN','CANT.','PRECIO UNITARIO','SUBTOTAL']]
+    for l in q.lineas: data.append([Paragraph(l.descripcion,styles['BodyText']),f'{l.cantidad:g}',f'$ {l.precio_unitario:,.0f}'.replace(',','.'),f'$ {l.cantidad*l.precio_unitario:,.0f}'.replace(',','.')])
+    t=Table(data,colWidths=[270,55,95,90],repeatRows=1); t.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),colors.HexColor('#0b6596')),('TEXTCOLOR',(0,0),(-1,0),colors.white),('GRID',(0,0),(-1,-1),.4,colors.grey),('ALIGN',(1,1),(-1,-1),'RIGHT'),('PADDING',(0,0),(-1,-1),6)])); story += [t,Spacer(1,10)]
+    totals=[['Subtotal',f'$ {q.subtotal:,.0f}'.replace(',','.')], [f'Descuento {q.descuento_pct or 0:g}%',f'- $ {q.descuento:,.0f}'.replace(',','.')],['Neto',f'$ {q.neto:,.0f}'.replace(',','.')],['IVA 19%',f'$ {q.iva:,.0f}'.replace(',','.')],['TOTAL',f'$ {q.total:,.0f}'.replace(',','.')]]
+    tt=Table(totals,colWidths=[120,120],hAlign='RIGHT'); tt.setStyle(TableStyle([('GRID',(0,0),(-1,-1),.4,colors.grey),('ALIGN',(1,0),(1,-1),'RIGHT'),('BACKGROUND',(0,-1),(-1,-1),colors.HexColor('#0b6596')),('TEXTCOLOR',(0,-1),(-1,-1),colors.white),('PADDING',(0,0),(-1,-1),6)])); story += [tt,Spacer(1,14)]
+    story += [Paragraph(f'<b>Condiciones de pago:</b> {q.plazo_pago}',styles['BodyText']),Paragraph(f'<b>Inicio del plazo:</b> {q.inicio_plazo}',styles['BodyText'])]
+    if q.referencia: story.append(Paragraph(f'<b>Referencia:</b> {q.referencia}',styles['BodyText']))
+    if q.notas: story.append(Paragraph(f'<b>Notas:</b> {q.notas}',styles['BodyText']))
+    if q.estado=='Anulada': story.append(Paragraph('<b>COTIZACIÓN ANULADA</b>',styles['Heading2']))
+    doc.build(story); buf.seek(0)
+    audit('PDF cotización generado',q.numero)
+    return send_file(buf,mimetype='application/pdf',as_attachment=True,download_name=f'{q.numero}.pdf')
 
 with app.app_context(): db.create_all(); asegurar_columnas(); seed_maestros()
 if __name__=='__main__': app.run(host='0.0.0.0',port=int(os.environ.get('PORT',5000)),debug=True)

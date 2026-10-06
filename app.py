@@ -5,11 +5,12 @@ from flask import Flask, render_template, request, redirect, url_for, flash, jso
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
 from io import BytesIO
+from PIL import Image as PILImage, ImageOps
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_RIGHT
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image, PageBreak
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY','cambiar-esta-clave-en-produccion')
@@ -80,6 +81,22 @@ class OTComponente(db.Model):
     material=db.Column(db.String(80)); ubicacion=db.Column(db.String(120)); observacion=db.Column(db.Text)
     componente_modelo=db.relationship('ComponenteModelo')
 
+class DiagnosticoHallazgo(db.Model):
+    id=db.Column(db.Integer, primary_key=True)
+    ot_id=db.Column(db.Integer, db.ForeignKey('ot.id'), nullable=False, index=True)
+    ot_componente_id=db.Column(db.Integer, db.ForeignKey('ot_componente.id'))
+    zona=db.Column(db.String(160))
+    condicion=db.Column(db.Text, nullable=False)
+    trabajo_recomendado=db.Column(db.Text)
+    observacion=db.Column(db.Text)
+    estado=db.Column(db.String(40), default='Pendiente')
+    foto_nombre=db.Column(db.String(180))
+    foto_mime=db.Column(db.String(60))
+    foto_datos=db.Column(db.LargeBinary)
+    creado=db.Column(db.DateTime, default=datetime.utcnow)
+    creado_por=db.Column(db.String(120))
+    componente=db.relationship('OTComponente')
+
 class Cotizacion(db.Model):
     id=db.Column(db.Integer, primary_key=True)
     numero=db.Column(db.String(30), unique=True, nullable=False)
@@ -132,6 +149,7 @@ class OT(db.Model):
     checklist=db.Column(db.String(120)); embalaje=db.Column(db.Text); despacho=db.Column(db.Text)
     fecha_comprometida=db.Column(db.Date)
     componentes_detalle=db.relationship('OTComponente', backref='ot', cascade='all, delete-orphan', lazy=True)
+    hallazgos=db.relationship('DiagnosticoHallazgo', backref='ot', cascade='all, delete-orphan', lazy=True, order_by='DiagnosticoHallazgo.id')
     @property
     def avance(self):
         estados=['Diagnóstico','Cotización enviada','Aprobada / Reparación','Control de calidad','Checklist / Embalaje','Despachada','Cerrada']
@@ -244,6 +262,17 @@ def next_number():
     y=datetime.now().year; last=OT.query.filter(OT.numero.like(f'OT-{y}-%')).order_by(OT.id.desc()).first(); seq=int(last.numero.split('-')[-1])+1 if last else 1
     return f'OT-{y}-{seq:04d}'
 
+def preparar_foto(upload):
+    if not upload or not upload.filename: return None, None, None
+    try:
+        img=PILImage.open(upload.stream)
+        img=ImageOps.exif_transpose(img).convert('RGB')
+        img.thumbnail((1600,1600))
+        out=BytesIO(); img.save(out,format='JPEG',quality=82,optimize=True)
+        return upload.filename[:180], 'image/jpeg', out.getvalue()
+    except Exception:
+        return None, None, None
+
 @app.route('/setup',methods=['GET','POST'])
 def setup():
     if Usuario.query.count()>0: return redirect(url_for('login'))
@@ -326,6 +355,69 @@ def ver_ot(ot_id):
         db.session.commit(); audit('OT actualizada',ot.numero); flash('OT actualizada'); return redirect(url_for('ver_ot',ot_id=ot.id))
     return render_template('ot.html',ot=ot)
 
+
+@app.route('/ot/<int:ot_id>/diagnostico', methods=['GET','POST'])
+@permiso_required('diagnostico')
+def diagnostico_ot(ot_id):
+    ot=db.session.get(OT,ot_id) or abort(404)
+    if request.method=='POST':
+        comp_id=request.form.get('ot_componente_id')
+        comp=db.session.get(OTComponente,int(comp_id)) if comp_id else None
+        if comp and comp.ot_id!=ot.id: abort(400)
+        condicion=request.form.get('condicion','').strip()
+        if not condicion:
+            flash('Debes indicar la condición encontrada.'); return redirect(url_for('diagnostico_ot',ot_id=ot.id))
+        nombre,mime,datos=preparar_foto(request.files.get('foto'))
+        h=DiagnosticoHallazgo(ot_id=ot.id,ot_componente_id=comp.id if comp else None,zona=request.form.get('zona','').strip(),condicion=condicion,trabajo_recomendado=request.form.get('trabajo_recomendado','').strip(),observacion=request.form.get('observacion','').strip(),estado=request.form.get('estado','Pendiente'),foto_nombre=nombre,foto_mime=mime,foto_datos=datos,creado_por=usuario_actual().nombre)
+        db.session.add(h); db.session.commit(); audit('Hallazgo diagnóstico creado',f'{ot.numero} / {comp.nombre if comp else "General"}')
+        flash('Hallazgo agregado al diagnóstico.'); return redirect(url_for('diagnostico_ot',ot_id=ot.id))
+    return render_template('diagnostico.html',ot=ot)
+
+@app.route('/diagnostico/hallazgo/<int:hid>/foto')
+@login_required
+def diagnostico_foto(hid):
+    h=db.session.get(DiagnosticoHallazgo,hid) or abort(404)
+    if not h.foto_datos: abort(404)
+    return send_file(BytesIO(h.foto_datos),mimetype=h.foto_mime or 'image/jpeg',download_name=h.foto_nombre or f'hallazgo-{h.id}.jpg')
+
+@app.route('/diagnostico/hallazgo/<int:hid>/eliminar',methods=['POST'])
+@permiso_required('diagnostico')
+def diagnostico_eliminar(hid):
+    h=db.session.get(DiagnosticoHallazgo,hid) or abort(404); ot_id=h.ot_id; detalle=f'{h.ot.numero} / Hallazgo {h.id}'
+    db.session.delete(h); db.session.commit(); audit('Hallazgo diagnóstico eliminado',detalle); flash('Hallazgo eliminado.')
+    return redirect(url_for('diagnostico_ot',ot_id=ot_id))
+
+@app.route('/ot/<int:ot_id>/diagnostico/pdf')
+@permiso_required('diagnostico')
+def diagnostico_pdf(ot_id):
+    ot=db.session.get(OT,ot_id) or abort(404)
+    buf=BytesIO(); doc=SimpleDocTemplate(buf,pagesize=A4,rightMargin=28,leftMargin=28,topMargin=28,bottomMargin=30)
+    styles=getSampleStyleSheet(); body=styles['BodyText']; body.fontSize=9; body.leading=12
+    small=ParagraphStyle('small',parent=body,fontSize=8,leading=10,textColor=colors.HexColor('#444444'))
+    story=[]
+    logo_path=os.path.join(app.root_path,'static','img','logo-ingepro.png')
+    logo=Image(logo_path,width=150,height=60) if os.path.exists(logo_path) else Paragraph('<b>INGEPRO</b>',styles['Heading1'])
+    head=Table([[logo,Paragraph(f'<b>DIVISIÓN MAESTRANZA</b><br/><font size="16">Informe de Diagnóstico Técnico</font><br/>{ot.numero}',styles['Heading2'])]],colWidths=[180,330])
+    head.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'MIDDLE'),('LINEBELOW',(0,0),(-1,-1),2,colors.HexColor('#0b6596')),('BOTTOMPADDING',(0,0),(-1,-1),8)])); story += [head,Spacer(1,12)]
+    meta=[['Cliente',ot.cliente],['Equipo',ot.equipo],['Serie / Tag',ot.serie or '-'],['Guía',ot.guia or '-'],['Fecha',datetime.now().strftime('%d/%m/%Y')],['Hallazgos',str(len(ot.hallazgos))]]
+    mt=Table(meta,colWidths=[100,410]); mt.setStyle(TableStyle([('GRID',(0,0),(-1,-1),.35,colors.lightgrey),('BACKGROUND',(0,0),(0,-1),colors.HexColor('#eef3f7')),('PADDING',(0,0),(-1,-1),5)])); story += [mt,Spacer(1,12)]
+    if ot.diagnostico: story += [Paragraph('<b>Resumen general</b>',styles['Heading3']),Paragraph(ot.diagnostico.replace('\
+','<br/>'),body),Spacer(1,10)]
+    if not ot.hallazgos: story.append(Paragraph('No existen hallazgos fotográficos registrados.',body))
+    for i,h in enumerate(ot.hallazgos,1):
+        if i>1: story.append(Spacer(1,8))
+        comp=(h.componente.codigo+' · ' if h.componente and h.componente.codigo else '')+(h.componente.nombre if h.componente else 'Inspección general')
+        story.append(Paragraph(f'<b>({i}) {comp}</b>',styles['Heading3']))
+        if h.foto_datos:
+            try:
+                im=Image(BytesIO(h.foto_datos)); im._restrictSize(245,260); story.append(im)
+            except: pass
+        txt=f'<b>Zona:</b> {h.zona or "-"}<br/><b>Condición encontrada:</b> {h.condicion}<br/><b>Trabajo recomendado:</b> {h.trabajo_recomendado or "-"}'
+        if h.observacion: txt+=f'<br/><b>Observación:</b> {h.observacion}'
+        txt+=f'<br/><b>Registrado:</b> {h.creado.strftime("%d/%m/%Y %H:%M") if h.creado else "-"} · {h.creado_por or "-"}'
+        story.append(Paragraph(txt,body))
+    doc.build(story); buf.seek(0); audit('PDF diagnóstico generado',ot.numero)
+    return send_file(buf,mimetype='application/pdf',as_attachment=True,download_name=f'Diagnostico-{ot.numero}.pdf')
 
 @app.route('/clientes')
 @permiso_required('clientes')

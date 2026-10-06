@@ -33,11 +33,19 @@ class Usuario(db.Model):
     def set_password(self,p): self.password_hash=generate_password_hash(p)
     def check_password(self,p): return check_password_hash(self.password_hash,p)
     @property
+    def es_admin(self):
+        return (self.rol or '').strip().lower() in ('administrador','admin','administrator')
+    @property
     def permisos(self):
-        if self.rol=='Administrador': return list(PERMISOS.keys())
+        if self.es_admin: return list(PERMISOS.keys())
         try: return json.loads(self.permisos_json or '[]')
         except: return []
-    def puede(self,p): return self.rol=='Administrador' or p in self.permisos
+    def puede(self,p):
+        # Compatibilidad con permisos de versiones anteriores.
+        if self.es_admin: return True
+        permisos=set(self.permisos)
+        aliases={'usuarios':{'administracion'}, 'clientes':{'maestros'}}
+        return p in permisos or bool(aliases.get(p,set()) & permisos)
 
 class Auditoria(db.Model):
     id=db.Column(db.Integer, primary_key=True); fecha=db.Column(db.DateTime, default=datetime.utcnow)

@@ -1,0 +1,5 @@
+{% extends 'base.html' %}{% block c %}
+<div class="pagehead"><div><h1>Cotizaciones</h1><p>Presupuestos vinculados a las OT de INGEPRO.</p></div></div>
+<div class="card"><table><thead><tr><th>N°</th><th>OT</th><th>Cliente</th><th>Fecha</th><th>Estado</th><th>Total</th><th></th></tr></thead><tbody>
+{% for q in cotizaciones %}<tr><td><b>{{q.numero}}</b></td><td>OT #{{q.ot_id}}</td><td>{{q.cliente}}</td><td>{{q.fecha.strftime('%d/%m/%Y')}}</td><td><span class="badge">{{q.estado}}</span></td><td><b>$ {{'{:,.0f}'.format(q.total).replace(',','.')}}</b></td><td><a href="{{url_for('ver_cotizacion',qid=q.id)}}">Abrir →</a></td></tr>{% else %}<tr><td colspan="7">Aún no hay cotizaciones.</td></tr>{% endfor %}
+</tbody></table></div>{% endblock %}

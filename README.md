@@ -16,3 +16,10 @@ Al desplegar una base de datos nueva, abre la aplicación. El sistema mostrará 
 
 ## Producción
 Configurar `SECRET_KEY` como variable de entorno en Render y usar PostgreSQL mediante `DATABASE_URL`.
+
+## V5 - Plazo de ejecución
+- Tiempo de ejecución obligatorio en cotizaciones.
+- Unidad: días hábiles, días corridos o semanas.
+- Condición de inicio del plazo.
+- Al aprobar la cotización se registra la fecha de aprobación y se calcula la fecha comprometida de entrega.
+- La fecha comprometida queda asociada también a la OT.

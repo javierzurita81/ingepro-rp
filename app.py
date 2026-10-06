@@ -9,7 +9,7 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_RIGHT
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY','cambiar-esta-clave-en-produccion')
@@ -22,7 +22,7 @@ db = SQLAlchemy(app)
 PERMISOS = {
  'ingreso':'Ingreso de equipos', 'diagnostico':'Diagnóstico', 'cotizaciones':'Cotizaciones',
  'reparacion':'Reparación', 'calidad':'Control de calidad', 'despacho':'Embalaje y despacho',
- 'informes':'Informes', 'maestros':'Maestros', 'usuarios':'Administración de usuarios'
+ 'informes':'Informes', 'maestros':'Maestros', 'clientes':'Clientes y contactos', 'usuarios':'Administración de usuarios'
 }
 
 class Usuario(db.Model):
@@ -44,13 +44,33 @@ class Auditoria(db.Model):
     usuario=db.Column(db.String(120)); accion=db.Column(db.String(200)); detalle=db.Column(db.Text)
 
 class Cliente(db.Model):
-    id=db.Column(db.Integer, primary_key=True); nombre=db.Column(db.String(120), unique=True, nullable=False); activo=db.Column(db.Boolean, default=True)
+    id=db.Column(db.Integer, primary_key=True)
+    nombre=db.Column(db.String(120), unique=True, nullable=False) # razón social / nombre histórico
+    nombre_comercial=db.Column(db.String(120))
+    rut=db.Column(db.String(20), unique=True)
+    direccion=db.Column(db.String(200)); comuna=db.Column(db.String(100)); ciudad=db.Column(db.String(100)); giro=db.Column(db.String(180))
+    telefono=db.Column(db.String(60)); email=db.Column(db.String(140)); activo=db.Column(db.Boolean, default=True)
+    contactos=db.relationship('ContactoCliente', backref='empresa', cascade='all, delete-orphan', lazy=True)
+
+class ContactoCliente(db.Model):
+    id=db.Column(db.Integer, primary_key=True); cliente_id=db.Column(db.Integer, db.ForeignKey('cliente.id'), nullable=False)
+    nombre=db.Column(db.String(140), nullable=False); cargo=db.Column(db.String(120)); email=db.Column(db.String(140)); telefono=db.Column(db.String(60))
+    recibe_cotizacion=db.Column(db.Boolean, default=True); puede_aprobar=db.Column(db.Boolean, default=False)
+    recibe_diagnostico=db.Column(db.Boolean, default=True); recibe_informe_final=db.Column(db.Boolean, default=True); activo=db.Column(db.Boolean, default=True)
 class ModeloEquipo(db.Model):
     id=db.Column(db.Integer, primary_key=True); tipo=db.Column(db.String(80), nullable=False); marca=db.Column(db.String(80), nullable=False); modelo=db.Column(db.String(80), nullable=False); activo=db.Column(db.Boolean, default=True)
     componentes=db.relationship('ComponenteModelo', backref='modelo_equipo', cascade='all, delete-orphan', lazy=True)
     __table_args__=(db.UniqueConstraint('tipo','marca','modelo',name='uq_equipo_modelo'),)
 class ComponenteModelo(db.Model):
     id=db.Column(db.Integer, primary_key=True); modelo_id=db.Column(db.Integer, db.ForeignKey('modelo_equipo.id'), nullable=False); nombre=db.Column(db.String(100), nullable=False)
+    codigo=db.Column(db.String(80)); categoria=db.Column(db.String(40), default='Componente reparable'); material_default=db.Column(db.String(80)); activo=db.Column(db.Boolean, default=True)
+
+class OTComponente(db.Model):
+    id=db.Column(db.Integer, primary_key=True); ot_id=db.Column(db.Integer, db.ForeignKey('ot.id'), nullable=False); componente_modelo_id=db.Column(db.Integer, db.ForeignKey('componente_modelo.id'))
+    nombre=db.Column(db.String(120), nullable=False); codigo=db.Column(db.String(80)); categoria=db.Column(db.String(40), default='Componente reparable')
+    condicion_ingreso=db.Column(db.String(30), default='No recibido'); resolucion=db.Column(db.String(40), default='Sin intervención')
+    material=db.Column(db.String(80)); ubicacion=db.Column(db.String(120)); observacion=db.Column(db.Text)
+    componente_modelo=db.relationship('ComponenteModelo')
 
 class Cotizacion(db.Model):
     id=db.Column(db.Integer, primary_key=True)
@@ -103,6 +123,7 @@ class OT(db.Model):
     cotizacion=db.Column(db.String(80)); aprobacion=db.Column(db.String(30), default='Pendiente'); reparacion=db.Column(db.Text); control_calidad=db.Column(db.Text)
     checklist=db.Column(db.String(120)); embalaje=db.Column(db.Text); despacho=db.Column(db.Text)
     fecha_comprometida=db.Column(db.Date)
+    componentes_detalle=db.relationship('OTComponente', backref='ot', cascade='all, delete-orphan', lazy=True)
     @property
     def avance(self):
         estados=['Diagnóstico','Cotización enviada','Aprobada / Reparación','Control de calidad','Checklist / Embalaje','Despachada','Cerrada']
@@ -135,12 +156,35 @@ def permiso_required(p):
 def audit(accion, detalle=''):
     u=usuario_actual(); db.session.add(Auditoria(usuario=u.nombre if u else 'Sistema', accion=accion, detalle=detalle)); db.session.commit()
 
+def normalizar_rut(rut):
+    raw=''.join(ch for ch in (rut or '').upper() if ch.isdigit() or ch=='K')
+    if len(raw)<2: return ''
+    return raw[:-1]+'-'+raw[-1]
+
+def rut_valido(rut):
+    r=normalizar_rut(rut)
+    if '-' not in r: return False
+    cuerpo,dv=r.split('-')
+    if not cuerpo.isdigit() or dv not in '0123456789K': return False
+    suma=0; factor=2
+    for d in reversed(cuerpo):
+        suma += int(d)*factor; factor = 2 if factor==7 else factor+1
+    x=11-(suma%11); esperado='0' if x==11 else 'K' if x==10 else str(x)
+    return dv==esperado
+
+def formatear_rut(rut):
+    r=normalizar_rut(rut)
+    if '-' not in r: return rut or ''
+    cuerpo,dv=r.split('-'); partes=[]
+    while cuerpo: partes.insert(0,cuerpo[-3:]); cuerpo=cuerpo[:-3]
+    return '.'.join(partes)+'-'+dv
+
 def seed_maestros():
     if Cliente.query.count()==0:
         for n in ['SQM Nueva Victoria','SQM Salar','Cliente de prueba']: db.session.add(Cliente(nombre=n))
     if ModeloEquipo.query.count()==0:
         m=ModeloEquipo(tipo='Bomba centrífuga',marca='Vogel',modelo='P204/5')
-        m.componentes=[ComponenteModelo(nombre=n) for n in ['Eje','Cuerpo de rodamientos','Impulsor','Voluta','Frame adapter']]; db.session.add(m)
+        m.componentes=[ComponenteModelo(nombre=n) for n in ['Motor','Base','Acoplamiento','Tapa rodamiento lado transmisión','Tapa rodamiento lado impulsión','Cuerpo de rodamientos','Eje','Impulsor','Tuerca impulsor','Voluta','Descarga','Válvula check','Rodamiento lado transmisión','Rodamiento lado impulsión','Sello laberinto / Retén','Empaquetadura','O-rings']]; db.session.add(m)
     db.session.commit()
 
 def sumar_plazo(fecha_base, cantidad, unidad):
@@ -170,6 +214,18 @@ def asegurar_columnas():
     if 'ot' in insp.get_table_names():
         cols={c['name'] for c in insp.get_columns('ot')}
         if 'fecha_comprometida' not in cols: db.session.execute(text('ALTER TABLE ot ADD COLUMN fecha_comprometida DATE'))
+    if 'cliente' in insp.get_table_names():
+        cols={c['name'] for c in insp.get_columns('cliente')}
+        defs={'nombre_comercial':'VARCHAR(120)','rut':'VARCHAR(20)','direccion':'VARCHAR(200)','comuna':'VARCHAR(100)','ciudad':'VARCHAR(100)','giro':'VARCHAR(180)','telefono':'VARCHAR(60)','email':'VARCHAR(140)'}
+        for n,t in defs.items():
+            if n not in cols: db.session.execute(text(f'ALTER TABLE cliente ADD COLUMN {n} {t}'))
+        try: db.session.execute(text('CREATE UNIQUE INDEX IF NOT EXISTS uq_cliente_rut ON cliente (rut) WHERE rut IS NOT NULL'))
+        except: pass
+    if 'componente_modelo' in insp.get_table_names():
+        cols={c['name'] for c in insp.get_columns('componente_modelo')}
+        defs={'codigo':'VARCHAR(80)','categoria':'VARCHAR(40)','material_default':'VARCHAR(80)','activo':'BOOLEAN DEFAULT TRUE'}
+        for n,t in defs.items():
+            if n not in cols: db.session.execute(text(f'ALTER TABLE componente_modelo ADD COLUMN {n} {t}'))
     db.session.commit()
 
 def next_quote_number():
@@ -228,18 +284,24 @@ def usuario_estado(uid):
 @app.route('/api/modelo/<int:modelo_id>/componentes')
 @login_required
 def componentes_modelo(modelo_id):
-    m=db.session.get(ModeloEquipo,modelo_id) or abort(404); return jsonify([{'id':c.id,'nombre':c.nombre} for c in m.componentes])
+    m=db.session.get(ModeloEquipo,modelo_id) or abort(404); return jsonify([{'id':c.id,'nombre':c.nombre,'codigo':c.codigo or '','categoria':c.categoria or 'Componente reparable','material':c.material_default or ''} for c in m.componentes if c.activo is not False])
 @app.route('/ot/nueva',methods=['GET','POST'])
 @permiso_required('ingreso')
 def nueva_ot():
     clientes=Cliente.query.filter_by(activo=True).order_by(Cliente.nombre).all(); modelos=ModeloEquipo.query.filter_by(activo=True).order_by(ModeloEquipo.tipo,ModeloEquipo.marca,ModeloEquipo.modelo).all()
     if request.method=='POST':
-        cliente=db.session.get(Cliente,int(request.form['cliente_id'])) or abort(404); modelo=db.session.get(ModeloEquipo,int(request.form['modelo_id'])) or abort(404); recepcion=request.form.get('recepcion','Completa'); sel=request.form.getlist('componentes')
-        if recepcion=='Completa': componente='Bomba completa'
-        elif not sel: flash('Debes seleccionar al menos un componente.'); return render_template('nueva.html',clientes=clientes,modelos=modelos)
-        else: componente=', '.join(sel)
-        ot=OT(numero=next_number(),cliente=cliente.nombre,equipo=f'{modelo.tipo} {modelo.marca} {modelo.modelo}',componente=componente,serie=request.form.get('serie'),guia=request.form.get('guia'))
-        db.session.add(ot); db.session.commit(); audit('OT creada',ot.numero); flash(f'{ot.numero} creada correctamente'); return redirect(url_for('ver_ot',ot_id=ot.id))
+        cliente=db.session.get(Cliente,int(request.form['cliente_id'])) or abort(404); modelo=db.session.get(ModeloEquipo,int(request.form['modelo_id'])) or abort(404)
+        recibidos=set(request.form.getlist('componentes_recibidos'))
+        ot=OT(numero=next_number(),cliente=cliente.nombre,equipo=f'{modelo.tipo} {modelo.marca} {modelo.modelo}',componente='Pendiente detalle',serie=request.form.get('serie'),guia=request.form.get('guia'))
+        db.session.add(ot); db.session.flush()
+        nombres=[]
+        for c in modelo.componentes:
+            if c.activo is False: continue
+            cond='Recibido' if str(c.id) in recibidos else 'No recibido'
+            if cond=='Recibido': nombres.append(c.nombre)
+            db.session.add(OTComponente(ot_id=ot.id,componente_modelo_id=c.id,nombre=c.nombre,codigo=c.codigo,categoria=c.categoria or 'Componente reparable',condicion_ingreso=cond,material=c.material_default))
+        ot.componente=', '.join(nombres) if nombres else 'Sin componentes marcados como recibidos'
+        db.session.commit(); audit('OT creada',ot.numero); flash(f'{ot.numero} creada correctamente'); return redirect(url_for('ver_ot',ot_id=ot.id))
     return render_template('nueva.html',clientes=clientes,modelos=modelos)
 @app.route('/ot/<int:ot_id>',methods=['GET','POST'])
 @login_required
@@ -248,9 +310,58 @@ def ver_ot(ot_id):
     if request.method=='POST':
         for f in ['diagnostico','cotizacion','aprobacion','reparacion','control_calidad','checklist','embalaje','despacho','estado']:
             if f in request.form:setattr(ot,f,request.form.get(f))
+        for c in ot.componentes_detalle:
+            c.condicion_ingreso=request.form.get(f'condicion_{c.id}',c.condicion_ingreso)
+            c.resolucion=request.form.get(f'resolucion_{c.id}',c.resolucion)
+            c.material=request.form.get(f'material_{c.id}',c.material or '').strip()
+            c.ubicacion=request.form.get(f'ubicacion_{c.id}',c.ubicacion or '').strip()
         db.session.commit(); audit('OT actualizada',ot.numero); flash('OT actualizada'); return redirect(url_for('ver_ot',ot_id=ot.id))
     return render_template('ot.html',ot=ot)
 
+
+@app.route('/clientes')
+@permiso_required('clientes')
+def clientes(): return render_template('clientes.html',clientes=Cliente.query.order_by(Cliente.nombre).all())
+
+@app.route('/clientes/nuevo',methods=['GET','POST'])
+@permiso_required('clientes')
+def cliente_nuevo():
+    if request.method=='POST':
+        rut=normalizar_rut(request.form.get('rut'))
+        if not rut_valido(rut): flash('RUT inválido. Revisa el dígito verificador.'); return render_template('cliente_form.html',cliente=None)
+        existente=Cliente.query.filter_by(rut=rut).first()
+        if existente: flash(f'El RUT {formatear_rut(rut)} ya está registrado en {existente.nombre}.'); return redirect(url_for('cliente_ver',cid=existente.id))
+        c=Cliente(nombre=request.form['nombre'].strip(),nombre_comercial=request.form.get('nombre_comercial','').strip(),rut=rut,direccion=request.form.get('direccion','').strip(),comuna=request.form.get('comuna','').strip(),ciudad=request.form.get('ciudad','').strip(),giro=request.form.get('giro','').strip(),telefono=request.form.get('telefono','').strip(),email=request.form.get('email','').strip())
+        db.session.add(c); db.session.commit(); audit('Cliente creado',f'{c.nombre} / {c.rut}'); return redirect(url_for('cliente_ver',cid=c.id))
+    return render_template('cliente_form.html',cliente=None)
+
+@app.route('/clientes/<int:cid>',methods=['GET','POST'])
+@permiso_required('clientes')
+def cliente_ver(cid):
+    c=db.session.get(Cliente,cid) or abort(404)
+    if request.method=='POST':
+        if request.form.get('accion')=='contacto':
+            x=ContactoCliente(cliente_id=c.id,nombre=request.form['contacto_nombre'].strip(),cargo=request.form.get('cargo','').strip(),email=request.form.get('contacto_email','').strip(),telefono=request.form.get('contacto_telefono','').strip(),recibe_cotizacion=bool(request.form.get('recibe_cotizacion')),puede_aprobar=bool(request.form.get('puede_aprobar')),recibe_diagnostico=bool(request.form.get('recibe_diagnostico')),recibe_informe_final=bool(request.form.get('recibe_informe_final')))
+            db.session.add(x); db.session.commit(); audit('Contacto cliente creado',f'{c.nombre}: {x.nombre}'); flash('Contacto agregado.')
+        return redirect(url_for('cliente_ver',cid=c.id))
+    return render_template('cliente_ver.html',cliente=c,formatear_rut=formatear_rut)
+
+@app.route('/maestros/equipos',methods=['GET','POST'])
+@permiso_required('maestros')
+def maestros_equipos():
+    if request.method=='POST':
+        m=ModeloEquipo(tipo=request.form['tipo'].strip(),marca=request.form['marca'].strip(),modelo=request.form['modelo'].strip())
+        db.session.add(m); db.session.commit(); audit('Modelo de equipo creado',f'{m.marca} {m.modelo}'); return redirect(url_for('maestro_modelo',mid=m.id))
+    return render_template('maestros_equipos.html',modelos=ModeloEquipo.query.order_by(ModeloEquipo.marca,ModeloEquipo.modelo).all())
+
+@app.route('/maestros/equipos/<int:mid>',methods=['GET','POST'])
+@permiso_required('maestros')
+def maestro_modelo(mid):
+    m=db.session.get(ModeloEquipo,mid) or abort(404)
+    if request.method=='POST':
+        c=ComponenteModelo(modelo_id=m.id,nombre=request.form['nombre'].strip(),codigo=request.form.get('codigo','').strip(),categoria=request.form.get('categoria','Componente reparable'),material_default=request.form.get('material_default','').strip())
+        db.session.add(c); db.session.commit(); audit('Componente de modelo creado',f'{m.marca} {m.modelo}: {c.nombre}'); flash('Componente agregado al despiece.'); return redirect(url_for('maestro_modelo',mid=m.id))
+    return render_template('maestro_modelo.html',modelo=m)
 
 def cotizacion_activa_ot(ot_id):
     return Cotizacion.query.filter(Cotizacion.ot_id==ot_id, Cotizacion.estado!='Anulada').order_by(Cotizacion.id.desc()).first()
@@ -345,7 +456,10 @@ def cotizacion_pdf(qid):
     buf=BytesIO(); doc=SimpleDocTemplate(buf,pagesize=A4,rightMargin=28,leftMargin=28,topMargin=28,bottomMargin=28)
     styles=getSampleStyleSheet(); story=[]
     title=ParagraphStyle('t',parent=styles['Title'],fontSize=22,textColor=colors.HexColor('#0b6596'),alignment=TA_RIGHT)
-    story += [Paragraph('<b>INGEPRO</b><br/><font size="10">División Maestranza · Ingeniería y Servicios</font>',styles['Heading1']), Paragraph(f'Presupuesto # {q.numero}',title), Spacer(1,12)]
+    logo_path=os.path.join(app.root_path,'static','img','logo-ingepro.png')
+    logo=Image(logo_path,width=170,height=70) if os.path.exists(logo_path) else Paragraph('<b>INGEPRO</b>',styles['Heading1'])
+    cab=Table([[logo,Paragraph(f'<b>DIVISIÓN MAESTRANZA</b><br/><font size="16">Presupuesto {q.numero}</font>',title)]],colWidths=[220,290]); cab.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'MIDDLE'),('LINEBELOW',(0,0),(-1,-1),2,colors.HexColor('#0b6596')),('BOTTOMPADDING',(0,0),(-1,-1),8)]))
+    story += [cab,Spacer(1,14)]
     meta=[[Paragraph('<b>Cliente</b>',styles['BodyText']),q.cliente],[Paragraph('<b>OT</b>',styles['BodyText']),ot.numero],[Paragraph('<b>Equipo</b>',styles['BodyText']),ot.equipo],[Paragraph('<b>Fecha</b>',styles['BodyText']),q.fecha.strftime('%d/%m/%Y')],[Paragraph('<b>Validez</b>',styles['BodyText']),q.validez_hasta.strftime('%d/%m/%Y') if q.validez_hasta else '-'],[Paragraph('<b>Tiempo de ejecución</b>',styles['BodyText']),f'{q.plazo_ejecucion_cantidad or "-"} {q.plazo_ejecucion_unidad or ""}']]
     mt=Table(meta,colWidths=[120,390]); mt.setStyle(TableStyle([('GRID',(0,0),(-1,-1),.4,colors.lightgrey),('BACKGROUND',(0,0),(0,-1),colors.HexColor('#eef3f7')),('PADDING',(0,0),(-1,-1),6)])); story += [mt,Spacer(1,14)]
     data=[['DESCRIPCIÓN','CANT.','PRECIO UNITARIO','SUBTOTAL']]

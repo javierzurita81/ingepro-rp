@@ -636,6 +636,42 @@ def api_plan_ot(ot_id):
         data.append({'id':c.id,'nombre':c.nombre,'reparaciones':reps})
     return jsonify(data)
 
+@app.route('/planificacion/<int:aid>/editar',methods=['GET','POST'])
+@permiso_required('planificacion')
+def plan_editar(aid):
+    a=db.session.get(PlanActividad,aid) or abort(404)
+    if request.method=='POST':
+        usuario=db.session.get(Usuario,int(request.form.get('usuario_id') or 0))
+        if not usuario or not usuario.activo: abort(400)
+        try:
+            fi=date.fromisoformat(request.form['fecha_inicio']); ff=date.fromisoformat(request.form['fecha_fin'])
+            horas=float(request.form['horas_dia'])
+        except (ValueError,KeyError): abort(400)
+        if ff<fi or not 0<horas<=24:
+            flash('Verifique fechas y horas de la actividad.'); return redirect(url_for('plan_editar',aid=aid))
+        tarea=request.form.get('tarea','').strip()
+        if not tarea: flash('La tarea es obligatoria.'); return redirect(url_for('plan_editar',aid=aid))
+        a.usuario_id=usuario.id; a.fecha_inicio=fi; a.fecha_fin=ff; a.horas_dia=horas
+        a.tarea=tarea; a.estado=request.form.get('estado','Planificada'); a.observacion=request.form.get('observacion','').strip()
+        db.session.commit(); audit('Planificación modificada',f'{a.ot.numero}: {a.tarea}')
+        flash('Actividad actualizada correctamente.')
+        return redirect(url_for('planificacion',mes=fi.month,anio=fi.year))
+    usuarios=Usuario.query.filter_by(activo=True).order_by(Usuario.nombre).all()
+    return render_template('planificacion_editar.html',a=a,usuarios=usuarios)
+
+@app.route('/planificacion/<int:aid>/duplicar',methods=['POST'])
+@permiso_required('planificacion')
+def plan_duplicar(aid):
+    a=db.session.get(PlanActividad,aid) or abort(404)
+    u=db.session.get(Usuario,int(request.form.get('usuario_id') or 0))
+    if not u or not u.activo: abort(400)
+    copia=PlanActividad(ot_id=a.ot_id,ot_componente_id=a.ot_componente_id,reparacion_maestra_id=a.reparacion_maestra_id,
+        usuario_id=u.id,tarea=a.tarea,fecha_inicio=a.fecha_inicio,fecha_fin=a.fecha_fin,
+        horas_dia=a.horas_dia,estado=a.estado,observacion=a.observacion)
+    db.session.add(copia); db.session.commit(); audit('Segundo responsable planificado',f'{a.ot.numero}: {a.tarea} / {u.nombre}')
+    flash('Responsable adicional asignado. Puede editar sus fechas y horas por separado.')
+    return redirect(url_for('planificacion',mes=a.fecha_inicio.month,anio=a.fecha_inicio.year))
+
 @app.route('/planificacion/<int:aid>/eliminar',methods=['POST'])
 @permiso_required('planificacion')
 def plan_eliminar(aid):

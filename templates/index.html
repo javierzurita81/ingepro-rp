@@ -5,6 +5,7 @@
 {% if usuario_actual.puede('clientes') %}<a class="module-card" href="{{url_for('clientes')}}"><b>Clientes / Empresas</b><span>Empresas, RUT y contactos responsables de cotizaciones e informes.</span><strong>+ Crear empresa / contacto</strong></a>{% endif %}
 {% if usuario_actual.puede('cotizaciones') %}<a class="module-card" href="{{url_for('cotizaciones')}}"><b>Cotizaciones</b><span>Presupuestos vinculados a OT, PDF, aprobación y anulación.</span><strong>Ver cotizaciones</strong></a>{% endif %}
 {% if usuario_actual.puede('maestros') %}<a class="module-card" href="{{url_for('maestros_equipos')}}"><b>Maestro de Equipos</b><span>Tipo, marca, modelo, despiece, componentes y materiales.</span><strong>Administrar equipos</strong></a>{% endif %}
+{% if usuario_actual.puede('planificacion') %}<a class="module-card" href="{{url_for('planificacion')}}"><b>Planificación</b><span>Programación mensual, tareas por componente, responsables y carga diaria.</span><strong>Abrir planificación</strong></a>{% endif %}
 {% if usuario_actual.puede('usuarios') %}<a class="module-card" href="{{url_for('usuarios')}}"><b>Usuarios INGEPRO</b><span>Crear usuarios internos, cargos, accesos y permisos.</span><strong>+ Crear / administrar usuarios</strong></a>{% endif %}
 </div>
 <div class="top"><div><h1>Órdenes de trabajo</h1><p>Ingreso, diagnóstico, reparación, calidad y despacho.</p></div>{% if usuario_actual.puede('ingreso') %}<a class="btn" href="{{url_for('nueva_ot')}}">+ Ingresar equipo</a>{% endif %}</div>

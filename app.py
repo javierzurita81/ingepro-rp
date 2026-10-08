@@ -23,12 +23,12 @@ db = SQLAlchemy(app)
 PERMISOS = {
  'ingreso':'Ingreso de equipos', 'diagnostico':'Diagnóstico', 'cotizaciones':'Cotizaciones',
  'reparacion':'Reparación', 'calidad':'Control de calidad', 'despacho':'Embalaje y despacho',
- 'informes':'Informes', 'maestros':'Maestros', 'clientes':'Clientes y contactos', 'usuarios':'Administración de usuarios'
+ 'informes':'Informes', 'maestros':'Maestros', 'clientes':'Clientes y contactos', 'planificacion':'Planificación', 'usuarios':'Administración de usuarios'
 }
 
 class Usuario(db.Model):
     id=db.Column(db.Integer, primary_key=True); username=db.Column(db.String(60), unique=True, nullable=False)
-    nombre=db.Column(db.String(120), nullable=False); cargo=db.Column(db.String(100)); password_hash=db.Column(db.String(255), nullable=False)
+    nombre=db.Column(db.String(120), nullable=False); cargo=db.Column(db.String(100)); rut=db.Column(db.String(20)); email=db.Column(db.String(140)); sigla=db.Column(db.String(10), unique=True); color=db.Column(db.String(20), unique=True); password_hash=db.Column(db.String(255), nullable=False)
     rol=db.Column(db.String(30), default='Usuario'); permisos_json=db.Column(db.Text, default='[]'); activo=db.Column(db.Boolean, default=True)
     creado=db.Column(db.DateTime, default=datetime.utcnow); ultimo_acceso=db.Column(db.DateTime)
     def set_password(self,p): self.password_hash=generate_password_hash(p)
@@ -47,6 +47,36 @@ class Usuario(db.Model):
         permisos=set(self.permisos)
         aliases={'usuarios':{'administracion'}, 'clientes':{'maestros'}}
         return p in permisos or bool(aliases.get(p,set()) & permisos)
+
+class ReparacionMaestra(db.Model):
+    id=db.Column(db.Integer, primary_key=True)
+    componente_modelo_id=db.Column(db.Integer, db.ForeignKey('componente_modelo.id'), nullable=False, index=True)
+    nombre=db.Column(db.String(180), nullable=False)
+    descripcion=db.Column(db.Text)
+    proceso=db.Column(db.String(100))
+    hh_estimadas=db.Column(db.Float, default=0)
+    recurso=db.Column(db.String(100))
+    maquina=db.Column(db.String(120))
+    secuencia=db.Column(db.Integer, default=0)
+    activo=db.Column(db.Boolean, default=True)
+    componente_modelo=db.relationship('ComponenteModelo', backref=db.backref('reparaciones', cascade='all, delete-orphan', lazy=True))
+
+class PlanActividad(db.Model):
+    id=db.Column(db.Integer, primary_key=True)
+    ot_id=db.Column(db.Integer, db.ForeignKey('ot.id'), nullable=False, index=True)
+    ot_componente_id=db.Column(db.Integer, db.ForeignKey('ot_componente.id'))
+    reparacion_maestra_id=db.Column(db.Integer, db.ForeignKey('reparacion_maestra.id'))
+    usuario_id=db.Column(db.Integer, db.ForeignKey('usuario.id'), nullable=False)
+    tarea=db.Column(db.String(200), nullable=False)
+    fecha_inicio=db.Column(db.Date, nullable=False)
+    fecha_fin=db.Column(db.Date, nullable=False)
+    horas_dia=db.Column(db.Float, default=8)
+    estado=db.Column(db.String(30), default='Planificada')
+    observacion=db.Column(db.Text)
+    ot=db.relationship('OT')
+    componente=db.relationship('OTComponente')
+    reparacion=db.relationship('ReparacionMaestra')
+    responsable=db.relationship('Usuario')
 
 class Auditoria(db.Model):
     id=db.Column(db.Integer, primary_key=True); fecha=db.Column(db.DateTime, default=datetime.utcnow)
@@ -230,6 +260,15 @@ def asegurar_columnas():
     # Migración ligera para instalaciones V4 existentes: create_all no agrega columnas nuevas.
     from sqlalchemy import inspect, text
     insp=inspect(db.engine)
+    if 'usuario' in insp.get_table_names():
+        cols={c['name'] for c in insp.get_columns('usuario')}
+        defs={'rut':'VARCHAR(20)','email':'VARCHAR(140)','sigla':'VARCHAR(10)','color':'VARCHAR(20)'}
+        for n,t in defs.items():
+            if n not in cols: db.session.execute(text(f'ALTER TABLE usuario ADD COLUMN {n} {t}'))
+        try: db.session.execute(text('CREATE UNIQUE INDEX IF NOT EXISTS uq_usuario_sigla ON usuario (sigla) WHERE sigla IS NOT NULL'))
+        except: pass
+        try: db.session.execute(text('CREATE UNIQUE INDEX IF NOT EXISTS uq_usuario_color ON usuario (color) WHERE color IS NOT NULL'))
+        except: pass
     if 'cotizacion' in insp.get_table_names():
         cols={c['name'] for c in insp.get_columns('cotizacion')}
         defs={
@@ -310,9 +349,26 @@ def usuario_nuevo():
         username=request.form['username'].strip().lower()
         if Usuario.query.filter_by(username=username).first(): flash('Ese usuario ya existe.'); return render_template('usuario_form.html',permisos=PERMISOS)
         if len(request.form['password'])<8: flash('La contraseña debe tener al menos 8 caracteres.'); return render_template('usuario_form.html',permisos=PERMISOS)
-        u=Usuario(username=username,nombre=request.form['nombre'].strip(),cargo=request.form.get('cargo','').strip(),rol=request.form.get('rol','Usuario'),permisos_json=json.dumps(request.form.getlist('permisos'))); u.set_password(request.form['password'])
+        sigla=request.form.get('sigla','').strip().upper() or None; color=request.form.get('color','').strip() or None
+        if sigla and Usuario.query.filter_by(sigla=sigla).first(): flash('La sigla ya está asignada a otro usuario.'); return render_template('usuario_form.html',permisos=PERMISOS,usuario=None)
+        if color and Usuario.query.filter_by(color=color).first(): flash('El color ya está asignado a otro usuario.'); return render_template('usuario_form.html',permisos=PERMISOS,usuario=None)
+        u=Usuario(username=username,nombre=request.form['nombre'].strip(),cargo=request.form.get('cargo','').strip(),rut=request.form.get('rut','').strip(),email=request.form.get('email','').strip(),sigla=sigla,color=color,rol=request.form.get('rol','Usuario'),permisos_json=json.dumps(request.form.getlist('permisos'))); u.set_password(request.form['password'])
         db.session.add(u); db.session.commit(); audit('Usuario creado',u.username); flash('Usuario creado correctamente.'); return redirect(url_for('usuarios'))
-    return render_template('usuario_form.html',permisos=PERMISOS)
+    return render_template('usuario_form.html',permisos=PERMISOS,usuario=None)
+
+@app.route('/usuarios/<int:uid>/editar',methods=['GET','POST'])
+@permiso_required('usuarios')
+def usuario_editar(uid):
+    u=db.session.get(Usuario,uid) or abort(404)
+    if request.method=='POST':
+        sigla=request.form.get('sigla','').strip().upper() or None; color=request.form.get('color','').strip() or None
+        if sigla and Usuario.query.filter(Usuario.sigla==sigla,Usuario.id!=u.id).first(): flash('La sigla ya está asignada a otro usuario.'); return render_template('usuario_form.html',permisos=PERMISOS,usuario=u)
+        if color and Usuario.query.filter(Usuario.color==color,Usuario.id!=u.id).first(): flash('El color ya está asignado a otro usuario.'); return render_template('usuario_form.html',permisos=PERMISOS,usuario=u)
+        u.nombre=request.form['nombre'].strip(); u.cargo=request.form.get('cargo','').strip(); u.rut=request.form.get('rut','').strip(); u.email=request.form.get('email','').strip(); u.sigla=sigla; u.color=color; u.rol=request.form.get('rol','Usuario'); u.permisos_json=json.dumps(request.form.getlist('permisos'))
+        if request.form.get('password'): u.set_password(request.form['password'])
+        db.session.commit(); audit('Usuario modificado',u.username); flash('Usuario actualizado.'); return redirect(url_for('usuarios'))
+    return render_template('usuario_form.html',permisos=PERMISOS,usuario=u)
+
 @app.route('/usuarios/<int:uid>/estado',methods=['POST'])
 @permiso_required('usuarios')
 def usuario_estado(uid):
@@ -527,6 +583,63 @@ def maestro_modelo(mid):
         c=ComponenteModelo(modelo_id=m.id,nombre=request.form['nombre'].strip(),codigo=request.form.get('codigo','').strip(),categoria=request.form.get('categoria','Componente reparable'),material_default=request.form.get('material_default','').strip())
         db.session.add(c); db.session.commit(); audit('Componente de modelo creado',f'{m.marca} {m.modelo}: {c.nombre}'); flash('Componente agregado al despiece.'); return redirect(url_for('maestro_modelo',mid=m.id))
     return render_template('maestro_modelo.html',modelo=m)
+
+@app.route('/maestros/componentes/<int:cid>/reparaciones',methods=['GET','POST'])
+@permiso_required('maestros')
+def maestro_reparaciones(cid):
+    c=db.session.get(ComponenteModelo,cid) or abort(404)
+    if request.method=='POST':
+        r=ReparacionMaestra(componente_modelo_id=c.id,nombre=request.form['nombre'].strip(),descripcion=request.form.get('descripcion','').strip(),proceso=request.form.get('proceso','').strip(),hh_estimadas=float(request.form.get('hh_estimadas') or 0),recurso=request.form.get('recurso','').strip(),maquina=request.form.get('maquina','').strip(),secuencia=int(request.form.get('secuencia') or 0))
+        db.session.add(r); db.session.commit(); audit('Reparación maestra creada',f'{c.nombre}: {r.nombre}'); flash('Reparación agregada al componente.'); return redirect(url_for('maestro_reparaciones',cid=c.id))
+    return render_template('maestro_reparaciones.html',componente=c,reparaciones=ReparacionMaestra.query.filter_by(componente_modelo_id=c.id).order_by(ReparacionMaestra.secuencia,ReparacionMaestra.nombre).all())
+
+@app.route('/maestros/reparaciones/<int:rid>/estado',methods=['POST'])
+@permiso_required('maestros')
+def reparacion_estado(rid):
+    r=db.session.get(ReparacionMaestra,rid) or abort(404); r.activo=not r.activo; db.session.commit(); return redirect(url_for('maestro_reparaciones',cid=r.componente_modelo_id))
+
+@app.route('/planificacion',methods=['GET','POST'])
+@permiso_required('planificacion')
+def planificacion():
+    hoy=date.today(); mes=int(request.args.get('mes') or hoy.month); anio=int(request.args.get('anio') or hoy.year)
+    if request.method=='POST':
+        ot=db.session.get(OT,int(request.form['ot_id'])) or abort(404); comp_id=int(request.form.get('ot_componente_id') or 0) or None; rep_id=int(request.form.get('reparacion_maestra_id') or 0) or None
+        rep=db.session.get(ReparacionMaestra,rep_id) if rep_id else None
+        tarea=(request.form.get('tarea') or (rep.nombre if rep else '')).strip(); fi=datetime.strptime(request.form['fecha_inicio'],'%Y-%m-%d').date(); ff=datetime.strptime(request.form['fecha_fin'],'%Y-%m-%d').date()
+        if ff<fi: flash('La fecha de término no puede ser anterior al inicio.'); return redirect(url_for('planificacion',mes=fi.month,anio=fi.year))
+        a=PlanActividad(ot_id=ot.id,ot_componente_id=comp_id,reparacion_maestra_id=rep_id,usuario_id=int(request.form['usuario_id']),tarea=tarea,fecha_inicio=fi,fecha_fin=ff,horas_dia=float(request.form.get('horas_dia') or 8),estado=request.form.get('estado','Planificada'),observacion=request.form.get('observacion','').strip())
+        db.session.add(a); db.session.commit(); audit('Actividad planificada',f'{ot.numero}: {tarea}'); return redirect(url_for('planificacion',mes=fi.month,anio=fi.year))
+    import calendar
+    ndias=calendar.monthrange(anio,mes)[1]; dias=list(range(1,ndias+1)); inicio=date(anio,mes,1); fin=date(anio,mes,ndias)
+    actividades=PlanActividad.query.filter(PlanActividad.fecha_inicio<=fin,PlanActividad.fecha_fin>=inicio).order_by(PlanActividad.fecha_inicio,PlanActividad.id).all()
+    usuarios=Usuario.query.filter_by(activo=True).order_by(Usuario.nombre).all()
+    aprobadas=[]
+    for ot in OT.query.order_by(OT.fecha.desc()).all():
+        q=Cotizacion.query.filter_by(ot_id=ot.id,estado='Aprobada').order_by(Cotizacion.id.desc()).first()
+        if q: aprobadas.append(ot)
+    carga={u.id:{d:0 for d in dias} for u in usuarios}
+    for a in actividades:
+        d=max(a.fecha_inicio,inicio)
+        while d<=min(a.fecha_fin,fin):
+            if d.day in carga.get(a.usuario_id,{}): carga[a.usuario_id][d.day]+=a.horas_dia or 0
+            d+=timedelta(days=1)
+    return render_template('planificacion.html',mes=mes,anio=anio,dias=dias,actividades=actividades,usuarios=usuarios,ots=aprobadas,carga=carga,inicio=inicio)
+
+@app.route('/api/planificacion/ot/<int:ot_id>')
+@permiso_required('planificacion')
+def api_plan_ot(ot_id):
+    ot=db.session.get(OT,ot_id) or abort(404); data=[]
+    for c in ot.componentes_detalle:
+        reps=[]
+        if c.componente_modelo_id:
+            reps=[{'id':r.id,'nombre':r.nombre,'hh':r.hh_estimadas or 0} for r in ReparacionMaestra.query.filter_by(componente_modelo_id=c.componente_modelo_id,activo=True).order_by(ReparacionMaestra.secuencia).all()]
+        data.append({'id':c.id,'nombre':c.nombre,'reparaciones':reps})
+    return jsonify(data)
+
+@app.route('/planificacion/<int:aid>/eliminar',methods=['POST'])
+@permiso_required('planificacion')
+def plan_eliminar(aid):
+    a=db.session.get(PlanActividad,aid) or abort(404); m=a.fecha_inicio.month; y=a.fecha_inicio.year; db.session.delete(a); db.session.commit(); return redirect(url_for('planificacion',mes=m,anio=y))
 
 def cotizacion_activa_ot(ot_id):
     return Cotizacion.query.filter(Cotizacion.ot_id==ot_id, Cotizacion.estado!='Anulada').order_by(Cotizacion.id.desc()).first()

@@ -29,7 +29,7 @@ PERMISOS = {
 class Usuario(db.Model):
     id=db.Column(db.Integer, primary_key=True); username=db.Column(db.String(60), unique=True, nullable=False)
     nombre=db.Column(db.String(120), nullable=False); cargo=db.Column(db.String(100)); rut=db.Column(db.String(20)); email=db.Column(db.String(140)); sigla=db.Column(db.String(10), unique=True); color=db.Column(db.String(20), unique=True); password_hash=db.Column(db.String(255), nullable=False)
-    rol=db.Column(db.String(30), default='Usuario'); permisos_json=db.Column(db.Text, default='[]'); activo=db.Column(db.Boolean, default=True)
+    disponible_planificacion=db.Column(db.Boolean, default=False); rol=db.Column(db.String(30), default='Usuario'); permisos_json=db.Column(db.Text, default='[]'); activo=db.Column(db.Boolean, default=True)
     creado=db.Column(db.DateTime, default=datetime.utcnow); ultimo_acceso=db.Column(db.DateTime)
     def set_password(self,p): self.password_hash=generate_password_hash(p)
     def check_password(self,p): return check_password_hash(self.password_hash,p)
@@ -262,7 +262,7 @@ def asegurar_columnas():
     insp=inspect(db.engine)
     if 'usuario' in insp.get_table_names():
         cols={c['name'] for c in insp.get_columns('usuario')}
-        defs={'rut':'VARCHAR(20)','email':'VARCHAR(140)','sigla':'VARCHAR(10)','color':'VARCHAR(20)'}
+        defs={'rut':'VARCHAR(20)','email':'VARCHAR(140)','sigla':'VARCHAR(10)','color':'VARCHAR(20)','disponible_planificacion':'BOOLEAN DEFAULT FALSE'}
         for n,t in defs.items():
             if n not in cols: db.session.execute(text(f'ALTER TABLE usuario ADD COLUMN {n} {t}'))
         try: db.session.execute(text('CREATE UNIQUE INDEX IF NOT EXISTS uq_usuario_sigla ON usuario (sigla) WHERE sigla IS NOT NULL'))
@@ -352,7 +352,7 @@ def usuario_nuevo():
         sigla=request.form.get('sigla','').strip().upper() or None; color=request.form.get('color','').strip() or None
         if sigla and Usuario.query.filter_by(sigla=sigla).first(): flash('La sigla ya está asignada a otro usuario.'); return render_template('usuario_form.html',permisos=PERMISOS,usuario=None)
         if color and Usuario.query.filter_by(color=color).first(): flash('El color ya está asignado a otro usuario.'); return render_template('usuario_form.html',permisos=PERMISOS,usuario=None)
-        u=Usuario(username=username,nombre=request.form['nombre'].strip(),cargo=request.form.get('cargo','').strip(),rut=request.form.get('rut','').strip(),email=request.form.get('email','').strip(),sigla=sigla,color=color,rol=request.form.get('rol','Usuario'),permisos_json=json.dumps(request.form.getlist('permisos'))); u.set_password(request.form['password'])
+        u=Usuario(username=username,nombre=request.form['nombre'].strip(),cargo=request.form.get('cargo','').strip(),rut=request.form.get('rut','').strip(),email=request.form.get('email','').strip(),sigla=sigla,color=color,rol=request.form.get('rol','Usuario'),permisos_json=json.dumps(request.form.getlist('permisos')),disponible_planificacion=('disponible_planificacion' in request.form)); u.set_password(request.form['password'])
         db.session.add(u); db.session.commit(); audit('Usuario creado',u.username); flash('Usuario creado correctamente.'); return redirect(url_for('usuarios'))
     return render_template('usuario_form.html',permisos=PERMISOS,usuario=None)
 
@@ -364,7 +364,7 @@ def usuario_editar(uid):
         sigla=request.form.get('sigla','').strip().upper() or None; color=request.form.get('color','').strip() or None
         if sigla and Usuario.query.filter(Usuario.sigla==sigla,Usuario.id!=u.id).first(): flash('La sigla ya está asignada a otro usuario.'); return render_template('usuario_form.html',permisos=PERMISOS,usuario=u)
         if color and Usuario.query.filter(Usuario.color==color,Usuario.id!=u.id).first(): flash('El color ya está asignado a otro usuario.'); return render_template('usuario_form.html',permisos=PERMISOS,usuario=u)
-        u.nombre=request.form['nombre'].strip(); u.cargo=request.form.get('cargo','').strip(); u.rut=request.form.get('rut','').strip(); u.email=request.form.get('email','').strip(); u.sigla=sigla; u.color=color; u.rol=request.form.get('rol','Usuario'); u.permisos_json=json.dumps(request.form.getlist('permisos'))
+        u.nombre=request.form['nombre'].strip(); u.cargo=request.form.get('cargo','').strip(); u.rut=request.form.get('rut','').strip(); u.email=request.form.get('email','').strip(); u.sigla=sigla; u.color=color; u.rol=request.form.get('rol','Usuario'); u.permisos_json=json.dumps(request.form.getlist('permisos')); u.disponible_planificacion=('disponible_planificacion' in request.form)
         if request.form.get('password'): u.set_password(request.form['password'])
         db.session.commit(); audit('Usuario modificado',u.username); flash('Usuario actualizado.'); return redirect(url_for('usuarios'))
     return render_template('usuario_form.html',permisos=PERMISOS,usuario=u)
@@ -598,6 +598,36 @@ def maestro_reparaciones(cid):
 def reparacion_estado(rid):
     r=db.session.get(ReparacionMaestra,rid) or abort(404); r.activo=not r.activo; db.session.commit(); return redirect(url_for('maestro_reparaciones',cid=r.componente_modelo_id))
 
+def operarios_planificables():
+    return Usuario.query.filter_by(activo=True, disponible_planificacion=True).order_by(Usuario.nombre).all()
+
+def horas_ocupadas(usuario_id, dia, excluir_id=None):
+    q=PlanActividad.query.filter(PlanActividad.usuario_id==usuario_id, PlanActividad.fecha_inicio<=dia, PlanActividad.fecha_fin>=dia)
+    if excluir_id: q=q.filter(PlanActividad.id!=excluir_id)
+    return sum(a.horas_dia or 0 for a in q.all() if a.estado!='Terminada')
+
+def validar_cupo(usuario, fi, ff, horas, excluir_id=None):
+    if not usuario or not usuario.activo or not usuario.disponible_planificacion: return 'Seleccione un trabajador operativo habilitado.'
+    if ff<fi or horas<=0 or horas>8: return 'Verifique fechas y horas (máximo 8 horas por día).'
+    dia=fi
+    while dia<=ff:
+        libres=max(0,8-horas_ocupadas(usuario.id,dia,excluir_id))
+        if horas>libres+0.0001:
+            return f'{usuario.nombre}: el {dia.strftime("%d/%m/%Y")} solo tiene {libres:g} horas disponibles.'
+        dia+=timedelta(days=1)
+    return None
+
+@app.route('/api/planificacion/disponibilidad')
+@permiso_required('planificacion')
+def api_plan_disponibilidad():
+    try:
+        uid=int(request.args.get('usuario_id') or 0); dia=date.fromisoformat(request.args['fecha']); excluir=int(request.args.get('excluir_id') or 0)
+    except (ValueError,KeyError): return jsonify({'error':'Parámetros inválidos'}),400
+    usuario=db.session.get(Usuario,uid)
+    if not usuario or not usuario.activo or not usuario.disponible_planificacion: return jsonify({'error':'Trabajador no habilitado'}),400
+    ocupadas=horas_ocupadas(uid,dia,excluir or None)
+    return jsonify({'ocupadas':ocupadas,'disponibles':max(0,8-ocupadas),'fecha':dia.isoformat()})
+
 @app.route('/planificacion',methods=['GET','POST'])
 @permiso_required('planificacion')
 def planificacion():
@@ -606,13 +636,19 @@ def planificacion():
         ot=db.session.get(OT,int(request.form['ot_id'])) or abort(404); comp_id=int(request.form.get('ot_componente_id') or 0) or None; rep_id=int(request.form.get('reparacion_maestra_id') or 0) or None
         rep=db.session.get(ReparacionMaestra,rep_id) if rep_id else None
         tarea=(request.form.get('tarea') or (rep.nombre if rep else '')).strip(); fi=datetime.strptime(request.form['fecha_inicio'],'%Y-%m-%d').date(); ff=datetime.strptime(request.form['fecha_fin'],'%Y-%m-%d').date()
-        if ff<fi: flash('La fecha de término no puede ser anterior al inicio.'); return redirect(url_for('planificacion',mes=fi.month,anio=fi.year))
-        a=PlanActividad(ot_id=ot.id,ot_componente_id=comp_id,reparacion_maestra_id=rep_id,usuario_id=int(request.form['usuario_id']),tarea=tarea,fecha_inicio=fi,fecha_fin=ff,horas_dia=float(request.form.get('horas_dia') or 8),estado=request.form.get('estado','Planificada'),observacion=request.form.get('observacion','').strip())
+        try: horas=float(request.form.get('horas_dia') or 0)
+        except ValueError: horas=0
+        usuario=db.session.get(Usuario,int(request.form.get('usuario_id') or 0))
+        error=validar_cupo(usuario,fi,ff,horas)
+        if error: flash(error); return redirect(url_for('planificacion',mes=fi.month,anio=fi.year))
+        if comp_id and not OTComponente.query.filter_by(id=comp_id,ot_id=ot.id).first(): abort(400)
+        if not tarea: flash('Indique una tarea.'); return redirect(url_for('planificacion',mes=fi.month,anio=fi.year))
+        a=PlanActividad(ot_id=ot.id,ot_componente_id=comp_id,reparacion_maestra_id=rep_id,usuario_id=int(request.form['usuario_id']),tarea=tarea,fecha_inicio=fi,fecha_fin=ff,horas_dia=horas,estado=request.form.get('estado','Planificada'),observacion=request.form.get('observacion','').strip())
         db.session.add(a); db.session.commit(); audit('Actividad planificada',f'{ot.numero}: {tarea}'); return redirect(url_for('planificacion',mes=fi.month,anio=fi.year))
     import calendar
     ndias=calendar.monthrange(anio,mes)[1]; dias=list(range(1,ndias+1)); inicio=date(anio,mes,1); fin=date(anio,mes,ndias)
     actividades=PlanActividad.query.filter(PlanActividad.fecha_inicio<=fin,PlanActividad.fecha_fin>=inicio).order_by(PlanActividad.fecha_inicio,PlanActividad.id).all()
-    usuarios=Usuario.query.filter_by(activo=True).order_by(Usuario.nombre).all()
+    usuarios=operarios_planificables()
     aprobadas=[]
     for ot in OT.query.order_by(OT.fecha.desc()).all():
         q=Cotizacion.query.filter_by(ot_id=ot.id,estado='Aprobada').order_by(Cotizacion.id.desc()).first()
@@ -642,13 +678,13 @@ def plan_editar(aid):
     a=db.session.get(PlanActividad,aid) or abort(404)
     if request.method=='POST':
         usuario=db.session.get(Usuario,int(request.form.get('usuario_id') or 0))
-        if not usuario or not usuario.activo: abort(400)
+        if not usuario or not usuario.activo or not usuario.disponible_planificacion: abort(400)
         try:
             fi=date.fromisoformat(request.form['fecha_inicio']); ff=date.fromisoformat(request.form['fecha_fin'])
             horas=float(request.form['horas_dia'])
         except (ValueError,KeyError): abort(400)
-        if ff<fi or not 0<horas<=24:
-            flash('Verifique fechas y horas de la actividad.'); return redirect(url_for('plan_editar',aid=aid))
+        error=validar_cupo(usuario,fi,ff,horas,excluir_id=aid)
+        if error: flash(error); return redirect(url_for('plan_editar',aid=aid))
         tarea=request.form.get('tarea','').strip()
         if not tarea: flash('La tarea es obligatoria.'); return redirect(url_for('plan_editar',aid=aid))
         a.usuario_id=usuario.id; a.fecha_inicio=fi; a.fecha_fin=ff; a.horas_dia=horas
@@ -656,7 +692,7 @@ def plan_editar(aid):
         db.session.commit(); audit('Planificación modificada',f'{a.ot.numero}: {a.tarea}')
         flash('Actividad actualizada correctamente.')
         return redirect(url_for('planificacion',mes=fi.month,anio=fi.year))
-    usuarios=Usuario.query.filter_by(activo=True).order_by(Usuario.nombre).all()
+    usuarios=operarios_planificables()
     return render_template('planificacion_editar.html',a=a,usuarios=usuarios)
 
 @app.route('/planificacion/<int:aid>/duplicar',methods=['POST'])
@@ -664,7 +700,9 @@ def plan_editar(aid):
 def plan_duplicar(aid):
     a=db.session.get(PlanActividad,aid) or abort(404)
     u=db.session.get(Usuario,int(request.form.get('usuario_id') or 0))
-    if not u or not u.activo: abort(400)
+    if not u or not u.activo or not u.disponible_planificacion: abort(400)
+    error=validar_cupo(u,a.fecha_inicio,a.fecha_fin,a.horas_dia)
+    if error: flash(error); return redirect(url_for('planificacion',mes=a.fecha_inicio.month,anio=a.fecha_inicio.year))
     copia=PlanActividad(ot_id=a.ot_id,ot_componente_id=a.ot_componente_id,reparacion_maestra_id=a.reparacion_maestra_id,
         usuario_id=u.id,tarea=a.tarea,fecha_inicio=a.fecha_inicio,fecha_fin=a.fecha_fin,
         horas_dia=a.horas_dia,estado=a.estado,observacion=a.observacion)

@@ -462,6 +462,23 @@ def ver_ot(ot_id):
     return render_template('ot.html',ot=ot,modelos=modelos)
 
 
+@app.route('/ot/<int:ot_id>/vincular-componente', methods=['POST'])
+@permiso_required('ingreso')
+def vincular_componente_ot(ot_id):
+    ot=db.session.get(OT,ot_id) or abort(404)
+    c=db.session.get(OTComponente,int(request.form.get('componente_id') or 0)) or abort(404)
+    if c.ot_id!=ot.id: abort(400)
+    modelo_id=int(request.form.get('modelo_componente_id') or 0)
+    modelo=db.session.get(ComponenteModelo,modelo_id) if modelo_id else None
+    if modelo_id and (not modelo or not modelo.activo): abort(400)
+    if OTReparacionSeleccionada.query.filter_by(ot_componente_id=c.id).first() or PlanActividad.query.filter_by(ot_componente_id=c.id).first():
+        flash('Este componente ya tiene reparaciones seleccionadas o planificadas. Revise las asignaciones antes de cambiar el vínculo.')
+        return redirect(url_for('ver_ot',ot_id=ot.id))
+    c.componente_modelo_id=modelo.id if modelo else None
+    db.session.commit(); audit('Vínculo de componente maestro',f'{ot.numero}: {c.nombre}')
+    flash('Componente vinculado al maestro. Ahora seleccione sus reparaciones en Diagnóstico.')
+    return redirect(url_for('ver_ot',ot_id=ot.id))
+
 @app.route('/ot/<int:ot_id>/diagnostico', methods=['GET','POST'])
 @permiso_required('diagnostico')
 def diagnostico_ot(ot_id):
@@ -747,6 +764,18 @@ def api_plan_ot(ot_id):
             reps=[{'id':r.id,'nombre':r.nombre,'hh':r.hh_estimadas or 0} for r in ReparacionMaestra.query.filter(ReparacionMaestra.id.in_(ids),ReparacionMaestra.activo==True).order_by(ReparacionMaestra.secuencia).all()]
         data.append({'id':c.id,'nombre':c.nombre,'reparaciones':reps})
     return jsonify(data)
+
+@app.route('/api/planificacion/ot/<int:ot_id>/estado')
+@permiso_required('planificacion')
+def api_plan_ot_estado(ot_id):
+    ot=db.session.get(OT,ot_id) or abort(404)
+    detalles=[]
+    for c in ot.componentes_detalle:
+        if (c.condicion_ingreso or '').strip().lower()!='recibido': continue
+        total=ReparacionMaestra.query.filter_by(componente_modelo_id=c.componente_modelo_id,activo=True).count() if c.componente_modelo_id else 0
+        elegidas=OTReparacionSeleccionada.query.filter_by(ot_componente_id=c.id).count()
+        detalles.append({'id':c.id,'nombre':c.nombre,'vinculado':bool(c.componente_modelo_id),'maestro':total,'seleccionadas':elegidas})
+    return jsonify({'componentes':detalles,'ot_url':url_for('ver_ot',ot_id=ot.id),'diagnostico_url':url_for('ot_reparaciones',ot_id=ot.id)})
 
 @app.route('/planificacion/<int:aid>/editar',methods=['GET','POST'])
 @permiso_required('planificacion')

@@ -629,7 +629,7 @@ def cargar_cpr_112a20(cid):
 @permiso_required('diagnostico')
 def ot_reparaciones(ot_id):
     ot=db.session.get(OT,ot_id) or abort(404)
-    componentes=ot.componentes_detalle
+    componentes=[c for c in ot.componentes_detalle if (c.condicion_ingreso or '').strip().lower()=='recibido']
     disponibles={c.id:ReparacionMaestra.query.filter_by(componente_modelo_id=c.componente_modelo_id,activo=True).order_by(ReparacionMaestra.secuencia,ReparacionMaestra.id).all() if c.componente_modelo_id else [] for c in componentes}
     if request.method=='POST':
         permitidos={(c.id,r.id) for c in componentes for r in disponibles[c.id]}
@@ -702,7 +702,9 @@ def planificacion():
         usuario=db.session.get(Usuario,int(request.form.get('usuario_id') or 0))
         error=validar_cupo(usuario,fi,ff,horas)
         if error: flash(error); return redirect(url_for('planificacion',mes=fi.month,anio=fi.year))
-        if not comp_id or not OTComponente.query.filter_by(id=comp_id,ot_id=ot.id).first(): abort(400)
+        if not comp_id or not OTComponente.query.filter_by(id=comp_id,ot_id=ot.id,condicion_ingreso='Recibido').first():
+            flash('Solo puede planificar componentes marcados como Recibido en el despiece de la OT.')
+            return redirect(url_for('planificacion',mes=fi.month,anio=fi.year))
         if not rep_id or not rep or not OTReparacionSeleccionada.query.filter_by(ot_id=ot.id,ot_componente_id=comp_id,reparacion_maestra_id=rep_id).first():
             flash('Seleccione una tarea aprobada en el diagnóstico para este componente.')
             return redirect(url_for('planificacion',mes=fi.month,anio=fi.year))
@@ -730,6 +732,7 @@ def planificacion():
 def api_plan_ot(ot_id):
     ot=db.session.get(OT,ot_id) or abort(404); data=[]
     for c in ot.componentes_detalle:
+        if (c.condicion_ingreso or '').strip().lower()!='recibido': continue
         reps=[]
         if c.componente_modelo_id:
             ids=[x.reparacion_maestra_id for x in OTReparacionSeleccionada.query.filter_by(ot_id=ot.id,ot_componente_id=c.id).all()]
@@ -778,7 +781,7 @@ def plan_duplicar(aid):
 @app.route('/planificacion/<int:aid>/eliminar',methods=['POST'])
 @permiso_required('planificacion')
 def plan_eliminar(aid):
-    a=db.session.get(PlanActividad,aid) or abort(404); m=a.fecha_inicio.month; y=a.fecha_inicio.year; db.session.delete(a); db.session.commit(); return redirect(url_for('planificacion',mes=m,anio=y))
+    a=db.session.get(PlanActividad,aid) or abort(404); m=a.fecha_inicio.month; y=a.fecha_inicio.year; db.session.delete(a); db.session.commit(); audit('Asignación eliminada',f'{a.ot.numero}: {a.tarea}'); flash('Asignación eliminada; la OT y el diagnóstico permanecen intactos.'); return redirect(url_for('planificacion',mes=m,anio=y))
 
 def cotizacion_activa_ot(ot_id):
     return Cotizacion.query.filter(Cotizacion.ot_id==ot_id, Cotizacion.estado!='Anulada').order_by(Cotizacion.id.desc()).first()

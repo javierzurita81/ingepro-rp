@@ -61,6 +61,13 @@ class ReparacionMaestra(db.Model):
     activo=db.Column(db.Boolean, default=True)
     componente_modelo=db.relationship('ComponenteModelo', backref=db.backref('reparaciones', cascade='all, delete-orphan', lazy=True))
 
+class OTReparacionSeleccionada(db.Model):
+    id=db.Column(db.Integer,primary_key=True)
+    ot_id=db.Column(db.Integer,db.ForeignKey('ot.id'),nullable=False,index=True)
+    ot_componente_id=db.Column(db.Integer,db.ForeignKey('ot_componente.id'),nullable=False,index=True)
+    reparacion_maestra_id=db.Column(db.Integer,db.ForeignKey('reparacion_maestra.id'),nullable=False)
+    __table_args__=(db.UniqueConstraint('ot_componente_id','reparacion_maestra_id',name='uq_ot_reparacion'),)
+
 class PlanActividad(db.Model):
     id=db.Column(db.Integer, primary_key=True)
     ot_id=db.Column(db.Integer, db.ForeignKey('ot.id'), nullable=False, index=True)
@@ -462,7 +469,7 @@ def diagnostico_ot(ot_id):
     if request.method=='POST':
         comp_id=request.form.get('ot_componente_id')
         comp=db.session.get(OTComponente,int(comp_id)) if comp_id else None
-        if comp and comp.ot_id!=ot.id: abort(400)
+        if not comp or comp.ot_id!=ot.id: flash('Seleccione un componente del despiece de la OT.'); return redirect(url_for('diagnostico_ot',ot_id=ot.id))
         condicion=request.form.get('condicion','').strip()
         if not condicion:
             flash('Debes indicar la condición encontrada.'); return redirect(url_for('diagnostico_ot',ot_id=ot.id))
@@ -593,6 +600,60 @@ def maestro_reparaciones(cid):
         db.session.add(r); db.session.commit(); audit('Reparación maestra creada',f'{c.nombre}: {r.nombre}'); flash('Reparación agregada al componente.'); return redirect(url_for('maestro_reparaciones',cid=c.id))
     return render_template('maestro_reparaciones.html',componente=c,reparaciones=ReparacionMaestra.query.filter_by(componente_modelo_id=c.id).order_by(ReparacionMaestra.secuencia,ReparacionMaestra.nombre).all())
 
+CPR_112A20_TAREAS = [
+ 'ARENADO Y PINTURA ANTICORROSIVA','RETIRO DE PERNOS CORTADOS',
+ 'MECANIZADO ALOJAMIENTO RETEN','FABRICACION Y MONTAJE CAMISA ALOJAMIENTO RETEN',
+ 'PREMECANIZADO CAMISAS','MECANIZADO ALOJAMIENTO 02',
+ 'FABRICACION E INSTALACIÓN DE CAMISAS','REPARAR HILOS CON INSERTO',
+ 'CONTROL DE CALIDAD ALOJAMIENTO Y RETEN','LIMPIEZA PINTURA',
+ 'REPASO DE HILOS','CHECK LIST']
+
+@app.route('/maestros/componentes/<int:cid>/cargar-cpr-112a20',methods=['POST'])
+@permiso_required('maestros')
+def cargar_cpr_112a20(cid):
+    c=db.session.get(ComponenteModelo,cid) or abort(404)
+    if 'CPR' not in c.nombre.upper() and 'RODAMIENTO' not in c.nombre.upper():
+        flash('Esta plantilla solo corresponde a componentes CPR / cuerpo de rodamientos.')
+        return redirect(url_for('maestro_reparaciones',cid=cid))
+    existentes={r.nombre.strip().upper() for r in ReparacionMaestra.query.filter_by(componente_modelo_id=cid).all()}
+    nuevos=0
+    for n,nombre in enumerate(CPR_112A20_TAREAS,1):
+        if nombre.upper() not in existentes:
+            db.session.add(ReparacionMaestra(componente_modelo_id=cid,nombre=nombre,secuencia=n,activo=True))
+            nuevos+=1
+    db.session.commit()
+    flash(f'Plantilla CPR 112A20: {nuevos} tareas nuevas. Revise horas y recursos antes de cotizar.')
+    return redirect(url_for('maestro_reparaciones',cid=cid))
+
+@app.route('/ot/<int:ot_id>/reparaciones',methods=['GET','POST'])
+@permiso_required('diagnostico')
+def ot_reparaciones(ot_id):
+    ot=db.session.get(OT,ot_id) or abort(404)
+    componentes=ot.componentes_detalle
+    disponibles={c.id:ReparacionMaestra.query.filter_by(componente_modelo_id=c.componente_modelo_id,activo=True).order_by(ReparacionMaestra.secuencia,ReparacionMaestra.id).all() if c.componente_modelo_id else [] for c in componentes}
+    if request.method=='POST':
+        permitidos={(c.id,r.id) for c in componentes for r in disponibles[c.id]}
+        marcados=set()
+        for valor in request.form.getlist('reparacion'):
+            try: cid,rid=map(int,valor.split(':'))
+            except (ValueError,TypeError): abort(400)
+            if (cid,rid) not in permitidos: abort(400)
+            marcados.add((cid,rid))
+        existentes=OTReparacionSeleccionada.query.filter_by(ot_id=ot.id).all()
+        for x in existentes:
+            if (x.ot_componente_id,x.reparacion_maestra_id) not in marcados:
+                if PlanActividad.query.filter_by(ot_id=ot.id,ot_componente_id=x.ot_componente_id,reparacion_maestra_id=x.reparacion_maestra_id).first():
+                    flash('Una tarea ya planificada no puede desmarcarse; elimine o reprograme primero su actividad.')
+                    return redirect(url_for('ot_reparaciones',ot_id=ot.id))
+                db.session.delete(x)
+        prev={(x.ot_componente_id,x.reparacion_maestra_id) for x in existentes}
+        for cid,rid in marcados-prev:
+            db.session.add(OTReparacionSeleccionada(ot_id=ot.id,ot_componente_id=cid,reparacion_maestra_id=rid))
+        db.session.commit(); flash('Reparaciones necesarias guardadas para esta OT.')
+        return redirect(url_for('ot_reparaciones',ot_id=ot.id))
+    seleccionadas={(x.ot_componente_id,x.reparacion_maestra_id) for x in OTReparacionSeleccionada.query.filter_by(ot_id=ot.id).all()}
+    return render_template('ot_reparaciones.html',ot=ot,componentes=componentes,disponibles=disponibles,seleccionadas=seleccionadas)
+
 @app.route('/maestros/reparaciones/<int:rid>/estado',methods=['POST'])
 @permiso_required('maestros')
 def reparacion_estado(rid):
@@ -641,7 +702,10 @@ def planificacion():
         usuario=db.session.get(Usuario,int(request.form.get('usuario_id') or 0))
         error=validar_cupo(usuario,fi,ff,horas)
         if error: flash(error); return redirect(url_for('planificacion',mes=fi.month,anio=fi.year))
-        if comp_id and not OTComponente.query.filter_by(id=comp_id,ot_id=ot.id).first(): abort(400)
+        if not comp_id or not OTComponente.query.filter_by(id=comp_id,ot_id=ot.id).first(): abort(400)
+        if not rep_id or not rep or not OTReparacionSeleccionada.query.filter_by(ot_id=ot.id,ot_componente_id=comp_id,reparacion_maestra_id=rep_id).first():
+            flash('Seleccione una tarea aprobada en el diagnóstico para este componente.')
+            return redirect(url_for('planificacion',mes=fi.month,anio=fi.year))
         if not tarea: flash('Indique una tarea.'); return redirect(url_for('planificacion',mes=fi.month,anio=fi.year))
         a=PlanActividad(ot_id=ot.id,ot_componente_id=comp_id,reparacion_maestra_id=rep_id,usuario_id=int(request.form['usuario_id']),tarea=tarea,fecha_inicio=fi,fecha_fin=ff,horas_dia=horas,estado=request.form.get('estado','Planificada'),observacion=request.form.get('observacion','').strip())
         db.session.add(a); db.session.commit(); audit('Actividad planificada',f'{ot.numero}: {tarea}'); return redirect(url_for('planificacion',mes=fi.month,anio=fi.year))
@@ -668,7 +732,8 @@ def api_plan_ot(ot_id):
     for c in ot.componentes_detalle:
         reps=[]
         if c.componente_modelo_id:
-            reps=[{'id':r.id,'nombre':r.nombre,'hh':r.hh_estimadas or 0} for r in ReparacionMaestra.query.filter_by(componente_modelo_id=c.componente_modelo_id,activo=True).order_by(ReparacionMaestra.secuencia).all()]
+            ids=[x.reparacion_maestra_id for x in OTReparacionSeleccionada.query.filter_by(ot_id=ot.id,ot_componente_id=c.id).all()]
+            reps=[{'id':r.id,'nombre':r.nombre,'hh':r.hh_estimadas or 0} for r in ReparacionMaestra.query.filter(ReparacionMaestra.id.in_(ids),ReparacionMaestra.activo==True).order_by(ReparacionMaestra.secuencia).all()]
         data.append({'id':c.id,'nombre':c.nombre,'reparaciones':reps})
     return jsonify(data)
 

@@ -1,0 +1,7 @@
+{% extends 'base.html' %}{% block c %}
+<div class="pagehead"><div><div class="eyebrow">DIAGNÓSTICO · REPARACIONES NECESARIAS</div><h1>OT {{ot.numero}}</h1><p>{{ot.equipo}} · {{ot.cliente}}</p></div><a class="btn secondary" href="{{url_for('diagnostico_ot',ot_id=ot.id)}}">Volver a diagnóstico</a></div>
+<div class="panel wide"><h2>Seleccionar trabajos por componente</h2><p class="muted">Marque únicamente las tareas que necesita esta reparación. Las tareas marcadas serán las disponibles para programar individualmente. Las horas estimadas son referenciales y se pueden revisar en el maestro.</p>
+{% if componentes %}<form method="post">
+{% for c in componentes %}<div class="card" style="margin:14px 0;padding:18px"><h3>{{c.nombre}} {% if c.codigo %}· {{c.codigo}}{% endif %}</h3>
+{% if disponibles[c.id] %}<div class="grid2">{% for r in disponibles[c.id] %}<label style="display:flex;gap:10px;align-items:center"><input type="checkbox" name="reparacion" value="{{c.id}}:{{r.id}}" {% if (c.id,r.id) in seleccionadas %}checked{% endif %}><span>{{r.nombre}} <small>· {{r.hh_estimadas or 0}} HH estimadas</small></span></label>{% endfor %}</div>{% else %}<p class="muted">Este componente no tiene tareas activas en el Maestro de Reparaciones. Configúrelas primero en Maestros → Equipos → Componentes.</p>{% endif %}</div>{% endfor %}
+<button class="btn primary" type="submit">Guardar reparaciones seleccionadas</button></form>{% else %}<p class="muted">Primero registre los componentes en el despiece de esta OT.</p>{% endif %}</div>{% endblock %}

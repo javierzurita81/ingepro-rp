@@ -713,7 +713,7 @@ def planificacion():
     if request.method=='POST':
         ot=db.session.get(OT,int(request.form['ot_id'])) or abort(404); comp_id=int(request.form.get('ot_componente_id') or 0) or None; rep_id=int(request.form.get('reparacion_maestra_id') or 0) or None
         rep=db.session.get(ReparacionMaestra,rep_id) if rep_id else None
-        tarea=(request.form.get('tarea') or (rep.nombre if rep else '')).strip(); fi=datetime.strptime(request.form['fecha_inicio'],'%Y-%m-%d').date(); ff=datetime.strptime(request.form['fecha_fin'],'%Y-%m-%d').date()
+        tarea=(rep.nombre if rep else '').strip(); fi=datetime.strptime(request.form['fecha_inicio'],'%Y-%m-%d').date(); ff=datetime.strptime(request.form['fecha_fin'],'%Y-%m-%d').date()
         try: horas=float(request.form.get('horas_dia') or 0)
         except ValueError: horas=0
         usuario=db.session.get(Usuario,int(request.form.get('usuario_id') or 0))
@@ -732,6 +732,7 @@ def planificacion():
     ndias=calendar.monthrange(anio,mes)[1]; dias=list(range(1,ndias+1)); inicio=date(anio,mes,1); fin=date(anio,mes,ndias)
     actividades=PlanActividad.query.filter(PlanActividad.fecha_inicio<=fin,PlanActividad.fecha_fin>=inicio).order_by(PlanActividad.fecha_inicio,PlanActividad.id).all()
     usuarios=operarios_planificables()
+    usuarios_pendientes=Usuario.query.filter_by(activo=True,disponible_planificacion=False).order_by(Usuario.nombre).all()
     # La aprobación puede constar en la OT o en su cotización activa.
     # No limitar el listado a una sola coincidencia literal ni a la primera OT.
     aprobadas=[]
@@ -750,20 +751,37 @@ def planificacion():
         while d<=min(a.fecha_fin,fin):
             if d.day in carga.get(a.usuario_id,{}): carga[a.usuario_id][d.day]+=a.horas_dia or 0
             d+=timedelta(days=1)
-    return render_template('planificacion.html',mes=mes,anio=anio,dias=dias,actividades=actividades,usuarios=usuarios,ots=aprobadas,carga=carga,inicio=inicio)
+    return render_template('planificacion.html',mes=mes,anio=anio,dias=dias,actividades=actividades,usuarios=usuarios,usuarios_pendientes=usuarios_pendientes,ots=aprobadas,carga=carga,inicio=inicio)
 
 @app.route('/api/planificacion/ot/<int:ot_id>')
 @permiso_required('planificacion')
 def api_plan_ot(ot_id):
-    ot=db.session.get(OT,ot_id) or abort(404); data=[]
+    ot=db.session.get(OT,ot_id) or abort(404)
+    data=[]
     for c in ot.componentes_detalle:
-        if (c.condicion_ingreso or '').strip().lower()!='recibido': continue
+        if (c.condicion_ingreso or '').strip().casefold()!='recibido':
+            continue
+        selected={x.reparacion_maestra_id for x in OTReparacionSeleccionada.query.filter_by(ot_id=ot.id,ot_componente_id=c.id).all()}
         reps=[]
         if c.componente_modelo_id:
-            ids=[x.reparacion_maestra_id for x in OTReparacionSeleccionada.query.filter_by(ot_id=ot.id,ot_componente_id=c.id).all()]
-            reps=[{'id':r.id,'nombre':r.nombre,'hh':r.hh_estimadas or 0} for r in ReparacionMaestra.query.filter(ReparacionMaestra.id.in_(ids),ReparacionMaestra.activo==True).order_by(ReparacionMaestra.secuencia).all()]
-        data.append({'id':c.id,'nombre':c.nombre,'reparaciones':reps})
+            for r in ReparacionMaestra.query.filter_by(componente_modelo_id=c.componente_modelo_id,activo=True).order_by(ReparacionMaestra.secuencia,ReparacionMaestra.id).all():
+                reps.append({'id':r.id,'nombre':r.nombre,'hh':r.hh_estimadas or 0,'seleccionada':r.id in selected})
+        data.append({'id':c.id,'nombre':c.nombre,'vinculado':bool(c.componente_modelo_id),'reparaciones':reps})
     return jsonify(data)
+
+@app.route('/planificacion/habilitar-operario', methods=['POST'])
+@permiso_required('usuarios')
+def plan_habilitar_operario():
+    try: uid=int(request.form.get('usuario_id') or 0)
+    except ValueError: abort(400)
+    u=db.session.get(Usuario,uid) or abort(404)
+    if not u.activo: abort(400)
+    # Solo usuarios internos; ContactoCliente es una entidad distinta.
+    u.disponible_planificacion=True
+    db.session.commit()
+    audit('Operario habilitado para planificación',u.username)
+    flash(f'{u.nombre} habilitado como responsable de planificación.')
+    return redirect(url_for('planificacion'))
 
 @app.route('/api/planificacion/ot/<int:ot_id>/estado')
 @permiso_required('planificacion')

@@ -715,10 +715,18 @@ def planificacion():
     ndias=calendar.monthrange(anio,mes)[1]; dias=list(range(1,ndias+1)); inicio=date(anio,mes,1); fin=date(anio,mes,ndias)
     actividades=PlanActividad.query.filter(PlanActividad.fecha_inicio<=fin,PlanActividad.fecha_fin>=inicio).order_by(PlanActividad.fecha_inicio,PlanActividad.id).all()
     usuarios=operarios_planificables()
+    # La aprobación puede constar en la OT o en su cotización activa.
+    # No limitar el listado a una sola coincidencia literal ni a la primera OT.
     aprobadas=[]
     for ot in OT.query.order_by(OT.fecha.desc()).all():
-        q=Cotizacion.query.filter_by(ot_id=ot.id,estado='Aprobada').order_by(Cotizacion.id.desc()).first()
-        if q: aprobadas.append(ot)
+        q=Cotizacion.query.filter(Cotizacion.ot_id==ot.id, Cotizacion.estado!='Anulada').order_by(Cotizacion.id.desc()).first()
+        estado_cot=(q.estado or '').strip().casefold() if q else ''
+        estado_ot=(ot.aprobacion or '').strip().casefold()
+        # Una cotización expresamente rechazada no puede programarse.
+        if estado_cot=='rechazada':
+            continue
+        if estado_cot in ('aprobada','aprobado') or (q and estado_ot in ('aprobada','aprobado')):
+            aprobadas.append(ot)
     carga={u.id:{d:0 for d in dias} for u in usuarios}
     for a in actividades:
         d=max(a.fecha_inicio,inicio)

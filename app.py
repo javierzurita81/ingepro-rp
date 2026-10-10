@@ -790,13 +790,25 @@ def planificacion():
         while d<=min(a.fecha_fin,fin):
             if d.day in carga.get(a.usuario_id,{}): carga[a.usuario_id][d.day]+=a.horas_dia or 0
             d+=timedelta(days=1)
-    # Resumen por OT / componente / etapa: una fila por asignación, conservando
-    # varios responsables en una misma reparación y la trazabilidad individual.
+    # Resumen compacto: agrupar por OT, componente, etapa y responsable.
+    # Conservar asignaciones independientes para edición y auditoría.
     resumen={}
-    for a in sorted(actividades, key=lambda x:(x.ot.numero if x.ot else '', x.componente.nombre if x.componente else '', x.tarea or '', x.fecha_inicio, x.id)):
+    for a in sorted(actividades, key=lambda x:(x.ot.numero if x.ot else '', x.componente.nombre if x.componente else '', x.fecha_inicio, x.id)):
         ot_key=(a.ot_id, a.ot.numero if a.ot else 'OT sin número')
         comp_key=(a.ot_componente_id or 0, a.componente.nombre if a.componente else 'Sin componente')
-        resumen.setdefault(ot_key,{}).setdefault(comp_key,{}).setdefault(a.tarea or 'Sin descripción',[]).append(a)
+        nombre_maestro=(a.reparacion.nombre or '').strip() if a.reparacion else ''
+        nombre_manual=(a.tarea or '').strip()
+        # No atribuir automáticamente tareas antiguas a una reparación distinta.
+        nombre=nombre_maestro or nombre_manual or f'Actividad histórica #{a.id} (sin descripción)'
+        etapa_key=(a.reparacion_maestra_id or 0, nombre)
+        por_etapa=resumen.setdefault(ot_key,{}).setdefault(comp_key,{}).setdefault(etapa_key,{})
+        grupo=por_etapa.setdefault(a.usuario_id,{'responsable':a.responsable,'asignaciones':[],'horas_por_dia':{},'total_hh':0})
+        grupo['asignaciones'].append(a)
+        dia=max(a.fecha_inicio,inicio)
+        while dia<=min(a.fecha_fin,fin):
+            grupo['horas_por_dia'][dia.day]=grupo['horas_por_dia'].get(dia.day,0)+(a.horas_dia or 0)
+            grupo['total_hh']+=(a.horas_dia or 0)
+            dia+=timedelta(days=1)
     return render_template('planificacion.html',mes=mes,anio=anio,dias=dias,actividades=actividades,usuarios=usuarios,usuarios_pendientes=usuarios_pendientes,ots=aprobadas,carga=carga,inicio=inicio,resumen=resumen)
 
 @app.route('/api/planificacion/ot/<int:ot_id>')

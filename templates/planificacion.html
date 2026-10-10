@@ -6,6 +6,16 @@
 <div class="card" style="margin-top:18px"><h2>Reparaciones del componente</h2><p class="muted">Seleccione una OT y un componente en «Agregar actividad». Todas las reparaciones del maestro comienzan pendientes. Al completar sus horas o marcar «No aplica» salen de pendientes, sin borrarse del historial.</p><div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px"><button type="button" class="btn secondary" id="filtro_pendiente">Pendientes <span id="total_pendiente"></span></button><button type="button" class="btn secondary" id="filtro_programada">Programadas <span id="total_programada"></span></button><button type="button" class="btn secondary" id="filtro_no_aplica">No aplica <span id="total_no_aplica"></span></button></div><div class="plan-scroll"><table class="plan-grid" style="min-width:620px"><thead><tr><th>Reparación general</th><th>Estado / horas</th><th>Acciones</th></tr></thead><tbody id="lista_reparaciones"><tr><td colspan="3">Seleccione una OT y un componente para visualizar las reparaciones.</td></tr></tbody></table></div></div>
 <div class="card form-card" style="margin-top:18px"><h2>Agregar actividad</h2>{% if ots %}<form method="post" id="planForm"><div class="grid3"><div><label>OT aprobada</label><select name="ot_id" id="ot_id" required><option value="">Seleccione...</option>{% for o in ots %}<option value="{{o.id}}">{{o.numero}} · {{o.equipo}} · {{o.cliente}}</option>{% endfor %}</select></div><div><label>Componente</label><select name="ot_componente_id" id="comp_id"><option value="">Seleccione OT</option></select></div><div><label>Reparación del maestro</label><select name="reparacion_maestra_id" id="rep_id"><option value="">Seleccione componente</option></select><small id="rep_ayuda" class="muted">Puede programar directamente las reparaciones del maestro o marcarlas como «No aplica». <span id="enlaces_rep"></span></small></div><div><label>Responsable</label><select name="usuario_id" id="trabajador_plan" required><option value="">Seleccione...</option>{% for u in usuarios %}<option value="{{u.id}}">{{u.sigla or '-'}} · {{u.nombre}}</option>{% endfor %}</select></div><div><label>Inicio</label><input type="date" name="fecha_inicio" id="inicio_plan" required></div><div><label>Término</label><input type="date" name="fecha_fin" id="fin_plan" required></div><div><label>Horas por día</label><input type="number" name="horas_dia" min="0.5" max="8" step="0.5" value="1"></div><div><label>Estado</label><select name="estado"><option>Planificada</option><option>En ejecución</option><option>Terminada</option><option>En espera</option></select></div><div><label>Tarea</label><input name="tarea" id="tarea" placeholder="Se completa desde el maestro"></div></div><div class="card" style="margin:12px 0;padding:14px"><b>Selecciona el día de inicio</b><p class="muted">Haz clic en un día. El sistema mostrará las horas disponibles del trabajador seleccionado. La asignación no se distribuye automáticamente.</p><div id="dias_click" style="display:flex;flex-wrap:wrap;gap:6px"></div><p id="aviso_cupo" aria-live="polite">Selecciona trabajador y fecha.</p></div><label>Observación</label><input name="observacion"><button class="btn" type="submit">Agregar a planificación</button></form>{% else %}<p class="muted">No hay OT con cotización aprobada disponibles para planificar.</p>{% endif %}</div>
 <div class="card" style="margin-top:18px" id="resumen-planificacion">
+ <style>
+ #tabla_resumen th,#tabla_resumen td{padding:3px 5px;line-height:1.2;vertical-align:middle}
+ #tabla_resumen .fila-actividad{height:34px}
+ #tabla_resumen .fila-actividad .sticky-col{min-width:300px;max-width:380px;white-space:normal}
+ #tabla_resumen .fila-actividad small{display:block;color:#64748b;font-size:10px;margin-top:2px}
+ #tabla_resumen .worker-chip{min-width:25px;padding:3px 5px;font-size:10px}
+ #tabla_resumen .taskbar{min-height:20px;line-height:20px;font-size:10px}
+ #tabla_resumen .acciones-resumen{min-width:115px;white-space:normal}
+ #tabla_resumen .fila-componente td,#tabla_resumen .fila-ot td{padding:5px 8px}
+ </style>
  <h2>Resumen general de planificación por OT y reparación</h2>
  <p class="muted">Como en la planilla Excel: OT → componente → cada etapa de reparación → responsable → horas por día. Las etapas programadas permanecen aquí, aunque ya no aparezcan en el ListBox de pendientes.</p>
  <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:12px 0">
@@ -21,16 +31,16 @@
    <tr class="fila-ot" data-ot="{{ot_key[0]}}"><td class="sticky-col" colspan="{{dias|length+4}}" style="font-weight:800;background:#e9f0fa;color:#17345b">OT {{ot_key[1]}}</td></tr>
    {% for comp_key, etapas in componentes.items() %}
     <tr class="fila-componente" data-ot="{{ot_key[0]}}"><td class="sticky-col" colspan="{{dias|length+4}}" style="font-weight:700;background:#f3f6fb;color:#30415c">Componente: {{comp_key[1]}}</td></tr>
-    {% for etapa, asignaciones in etapas.items() %}
-     {% for a in asignaciones %}
-      <tr class="fila-actividad" data-ot="{{ot_key[0]}}" data-resp="{{a.usuario_id}}">
-       <td class="sticky-col" style="min-width:300px"><b>{{etapa}}</b><small>Asignación #{{a.id}} · {{a.fecha_inicio.strftime('%d/%m/%Y')}} a {{a.fecha_fin.strftime('%d/%m/%Y')}}</small></td>
-       <td><span class="worker-chip" style="background:{{a.responsable.color or '#64748b'}}">{{a.responsable.sigla or a.responsable.nombre[:2]}}</span></td>
-       <td>{{ (((a.fecha_fin-a.fecha_inicio).days+1)*(a.horas_dia or 0))|round(1) }}</td>
-       {% for d in dias %}{% set dd=inicio.replace(day=d) %}
-        <td class="taskcell dia-resumen" data-dia="{{d}}">{% if a.fecha_inicio<=dd and a.fecha_fin>=dd %}<span class="taskbar" style="background:{{a.responsable.color or '#64748b'}}" title="{{a.responsable.nombre}} · {{a.horas_dia}} HH · {{etapa}}">{{a.horas_dia|int if a.horas_dia==a.horas_dia|int else a.horas_dia}}h</span>{% endif %}</td>
+    {% for etapa_key, responsables in etapas.items() %}
+     {% for usuario_id, grupo in responsables.items() %}
+      <tr class="fila-actividad" data-ot="{{ot_key[0]}}" data-comp="{{comp_key[0]}}" data-resp="{{usuario_id}}">
+       <td class="sticky-col"><b>{{etapa_key[1]}}</b><small>{{grupo.asignaciones|length}} asignación(es)</small></td>
+       <td><span class="worker-chip" style="background:{{grupo.responsable.color or '#64748b'}}">{{grupo.responsable.sigla or grupo.responsable.nombre[:2]}}</span></td>
+       <td>{{grupo.total_hh|round(1)}}</td>
+       {% for d in dias %}
+        <td class="taskcell dia-resumen" data-dia="{{d}}">{% if grupo.horas_por_dia.get(d,0)>0 %}<span class="taskbar" style="background:{{grupo.responsable.color or '#64748b'}}" title="{{grupo.responsable.nombre}} · {{etapa_key[1]}}">{{grupo.horas_por_dia[d]|round(1)}}h</span>{% endif %}</td>
        {% endfor %}
-       <td style="min-width:145px"><a class="btn secondary" style="padding:5px 9px;font-size:12px" href="{{url_for('plan_editar',aid=a.id)}}">Editar</a><details style="margin-top:5px"><summary style="cursor:pointer;font-size:12px">+ Responsable</summary><form method="post" action="{{url_for('plan_duplicar',aid=a.id)}}"><select name="usuario_id" required><option value="">Seleccionar</option>{% for u in usuarios %}{% if u.id!=a.usuario_id %}<option value="{{u.id}}">{{u.sigla or '-'}} · {{u.nombre}}</option>{% endif %}{% endfor %}</select><button class="btn secondary" type="submit">Asignar</button></form></details><form method="post" action="{{url_for('plan_eliminar',aid=a.id)}}" onsubmit="return confirm('¿Eliminar esta asignación?')"><button class="iconbtn" title="Eliminar esta programación" type="submit">Eliminar</button></form></td>
+       <td class="acciones-resumen">{% for a in grupo.asignaciones %}<a class="btn secondary" style="padding:3px 6px;font-size:11px;margin:2px" title="Asignación #{{a.id}} · {{a.fecha_inicio}} a {{a.fecha_fin}}" href="{{url_for('plan_editar',aid=a.id)}}">Editar #{{a.id}}</a>{% endfor %}</td>
       </tr>
      {% endfor %}
     {% endfor %}

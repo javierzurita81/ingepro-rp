@@ -68,6 +68,15 @@ class OTReparacionSeleccionada(db.Model):
     reparacion_maestra_id=db.Column(db.Integer,db.ForeignKey('reparacion_maestra.id'),nullable=False)
     __table_args__=(db.UniqueConstraint('ot_componente_id','reparacion_maestra_id',name='uq_ot_reparacion'),)
 
+class PlanNoAplica(db.Model):
+    id=db.Column(db.Integer, primary_key=True)
+    ot_id=db.Column(db.Integer, db.ForeignKey('ot.id'), nullable=False, index=True)
+    ot_componente_id=db.Column(db.Integer, db.ForeignKey('ot_componente.id'), nullable=False, index=True)
+    reparacion_maestra_id=db.Column(db.Integer, db.ForeignKey('reparacion_maestra.id'), nullable=False)
+    fecha=db.Column(db.DateTime, default=datetime.utcnow)
+    usuario=db.Column(db.String(120))
+    __table_args__=(db.UniqueConstraint('ot_componente_id','reparacion_maestra_id',name='uq_plan_no_aplica'),)
+
 class PlanActividad(db.Model):
     id=db.Column(db.Integer, primary_key=True)
     ot_id=db.Column(db.Integer, db.ForeignKey('ot.id'), nullable=False, index=True)
@@ -722,8 +731,27 @@ def planificacion():
         if not comp_id or not OTComponente.query.filter_by(id=comp_id,ot_id=ot.id,condicion_ingreso='Recibido').first():
             flash('Solo puede planificar componentes marcados como Recibido en el despiece de la OT.')
             return redirect(url_for('planificacion',mes=fi.month,anio=fi.year))
-        if not rep_id or not rep or not OTReparacionSeleccionada.query.filter_by(ot_id=ot.id,ot_componente_id=comp_id,reparacion_maestra_id=rep_id).first():
-            flash('Seleccione una tarea aprobada en el diagnóstico para este componente.')
+        comp=db.session.get(OTComponente,comp_id)
+        if not rep or not comp or rep.componente_modelo_id!=comp.componente_modelo_id or not rep.activo:
+            flash('Seleccione una reparación activa del maestro correspondiente al componente.')
+            return redirect(url_for('planificacion',mes=fi.month,anio=fi.year))
+        if PlanNoAplica.query.filter_by(ot_id=ot.id,ot_componente_id=comp_id,reparacion_maestra_id=rep_id).first():
+            flash('Esta reparación está marcada como No aplica. Revierta ese estado antes de programar.')
+            return redirect(url_for('planificacion',mes=fi.month,anio=fi.year))
+        seleccion=OTReparacionSeleccionada.query.filter_by(ot_id=ot.id,ot_componente_id=comp_id,reparacion_maestra_id=rep_id).first()
+        if not seleccion:
+            db.session.add(OTReparacionSeleccionada(ot_id=ot.id,ot_componente_id=comp_id,reparacion_maestra_id=rep_id))
+        estimadas=float(rep.hh_estimadas or 0)
+        if estimadas>0:
+            ocupadas=sum((a.fecha_fin-a.fecha_inicio).days*a.horas_dia+a.horas_dia for a in PlanActividad.query.filter_by(ot_id=ot.id,ot_componente_id=comp_id,reparacion_maestra_id=rep_id).all())
+            solicitadas=((ff-fi).days+1)*horas
+            if ocupadas+solicitadas>estimadas+0.0001:
+                flash(f'La reparación solo tiene {max(0,estimadas-ocupadas):g} HH pendientes.')
+                db.session.rollback()
+                return redirect(url_for('planificacion',mes=fi.month,anio=fi.year))
+        elif PlanActividad.query.filter_by(ot_id=ot.id,ot_componente_id=comp_id,reparacion_maestra_id=rep_id).first():
+            flash('Esta reparación ya está programada. Revise el calendario antes de agregar otra asignación.')
+            db.session.rollback()
             return redirect(url_for('planificacion',mes=fi.month,anio=fi.year))
         if not tarea: flash('Indique una tarea.'); return redirect(url_for('planificacion',mes=fi.month,anio=fi.year))
         a=PlanActividad(ot_id=ot.id,ot_componente_id=comp_id,reparacion_maestra_id=rep_id,usuario_id=int(request.form['usuario_id']),tarea=tarea,fecha_inicio=fi,fecha_fin=ff,horas_dia=horas,estado=request.form.get('estado','Planificada'),observacion=request.form.get('observacion','').strip())
@@ -765,9 +793,39 @@ def api_plan_ot(ot_id):
         reps=[]
         if c.componente_modelo_id:
             for r in ReparacionMaestra.query.filter_by(componente_modelo_id=c.componente_modelo_id,activo=True).order_by(ReparacionMaestra.secuencia,ReparacionMaestra.id).all():
-                reps.append({'id':r.id,'nombre':r.nombre,'hh':r.hh_estimadas or 0,'seleccionada':r.id in selected})
+                asignaciones=PlanActividad.query.filter_by(ot_id=ot.id,ot_componente_id=c.id,reparacion_maestra_id=r.id).all()
+                programadas=sum(((a.fecha_fin-a.fecha_inicio).days+1)*(a.horas_dia or 0) for a in asignaciones)
+                no_aplica=PlanNoAplica.query.filter_by(ot_id=ot.id,ot_componente_id=c.id,reparacion_maestra_id=r.id).first() is not None
+                estimadas=float(r.hh_estimadas or 0)
+                restante=max(0,estimadas-programadas) if estimadas>0 else (0 if asignaciones else None)
+                estado='No aplica' if no_aplica else ('Programada' if restante==0 else ('Parcial' if asignaciones else 'Pendiente'))
+                reps.append({'id':r.id,'nombre':r.nombre,'hh':estimadas,'seleccionada':r.id in selected,'programadas':programadas,'restante':restante,'estado':estado})
         data.append({'id':c.id,'nombre':c.nombre,'vinculado':bool(c.componente_modelo_id),'reparaciones':reps})
     return jsonify(data)
+
+@app.route('/api/planificacion/reparacion/estado',methods=['POST'])
+@permiso_required('planificacion')
+def plan_reparacion_estado():
+    try:
+        ot_id=int(request.form.get('ot_id') or 0)
+        comp_id=int(request.form.get('ot_componente_id') or 0)
+        rep_id=int(request.form.get('reparacion_maestra_id') or 0)
+    except ValueError: abort(400)
+    ot=db.session.get(OT,ot_id); comp=db.session.get(OTComponente,comp_id); rep=db.session.get(ReparacionMaestra,rep_id)
+    if not ot or not comp or comp.ot_id!=ot_id or not rep or rep.componente_modelo_id!=comp.componente_modelo_id: abort(400)
+    accion=request.form.get('accion')
+    registro=PlanNoAplica.query.filter_by(ot_id=ot_id,ot_componente_id=comp_id,reparacion_maestra_id=rep_id).first()
+    if accion=='no_aplica':
+        if PlanActividad.query.filter_by(ot_id=ot_id,ot_componente_id=comp_id,reparacion_maestra_id=rep_id).first():
+            return jsonify({'error':'La reparación tiene horas programadas. Elimine primero sus asignaciones.'}),409
+        if not registro:
+            db.session.add(PlanNoAplica(ot_id=ot_id,ot_componente_id=comp_id,reparacion_maestra_id=rep_id,usuario=str(session.get('username',''))))
+    elif accion=='revertir':
+        if registro: db.session.delete(registro)
+    else: abort(400)
+    db.session.commit()
+    audit('Estado de reparación en planificación',f'{ot.numero} · {rep.nombre}: {accion}')
+    return jsonify({'ok':True})
 
 @app.route('/planificacion/habilitar-operario', methods=['POST'])
 @permiso_required('usuarios')

@@ -715,6 +715,17 @@ def api_plan_disponibilidad():
     ocupadas=horas_ocupadas(uid,dia,excluir or None)
     return jsonify({'ocupadas':ocupadas,'disponibles':max(0,8-ocupadas),'fecha':dia.isoformat()})
 
+def asignaciones_reparacion(ot_id, componente_id, reparacion):
+    """Incluye actividades antiguas sin FK al maestro, por nombre exacto normalizado."""
+    import unicodedata
+    def normalizar(valor):
+        texto=unicodedata.normalize('NFKD', (valor or '').strip().casefold())
+        return ' '.join(''.join(c for c in texto if not unicodedata.combining(c)).split())
+    nombre=normalizar(reparacion.nombre)
+    registros=PlanActividad.query.filter_by(ot_id=ot_id,ot_componente_id=componente_id).all()
+    return [a for a in registros if a.reparacion_maestra_id==reparacion.id or
+            (a.reparacion_maestra_id is None and normalizar(a.tarea)==nombre)]
+
 @app.route('/planificacion',methods=['GET','POST'])
 @permiso_required('planificacion')
 def planificacion():
@@ -743,13 +754,13 @@ def planificacion():
             db.session.add(OTReparacionSeleccionada(ot_id=ot.id,ot_componente_id=comp_id,reparacion_maestra_id=rep_id))
         estimadas=float(rep.hh_estimadas or 0)
         if estimadas>0:
-            ocupadas=sum((a.fecha_fin-a.fecha_inicio).days*a.horas_dia+a.horas_dia for a in PlanActividad.query.filter_by(ot_id=ot.id,ot_componente_id=comp_id,reparacion_maestra_id=rep_id).all())
+            ocupadas=sum((a.fecha_fin-a.fecha_inicio).days*a.horas_dia+a.horas_dia for a in asignaciones_reparacion(ot.id,comp_id,rep))
             solicitadas=((ff-fi).days+1)*horas
             if ocupadas+solicitadas>estimadas+0.0001:
                 flash(f'La reparación solo tiene {max(0,estimadas-ocupadas):g} HH pendientes.')
                 db.session.rollback()
                 return redirect(url_for('planificacion',mes=fi.month,anio=fi.year))
-        elif PlanActividad.query.filter_by(ot_id=ot.id,ot_componente_id=comp_id,reparacion_maestra_id=rep_id).first():
+        elif asignaciones_reparacion(ot.id,comp_id,rep):
             flash('Esta reparación ya está programada. Revise el calendario antes de agregar otra asignación.')
             db.session.rollback()
             return redirect(url_for('planificacion',mes=fi.month,anio=fi.year))
@@ -779,7 +790,14 @@ def planificacion():
         while d<=min(a.fecha_fin,fin):
             if d.day in carga.get(a.usuario_id,{}): carga[a.usuario_id][d.day]+=a.horas_dia or 0
             d+=timedelta(days=1)
-    return render_template('planificacion.html',mes=mes,anio=anio,dias=dias,actividades=actividades,usuarios=usuarios,usuarios_pendientes=usuarios_pendientes,ots=aprobadas,carga=carga,inicio=inicio)
+    # Resumen por OT / componente / etapa: una fila por asignación, conservando
+    # varios responsables en una misma reparación y la trazabilidad individual.
+    resumen={}
+    for a in sorted(actividades, key=lambda x:(x.ot.numero if x.ot else '', x.componente.nombre if x.componente else '', x.tarea or '', x.fecha_inicio, x.id)):
+        ot_key=(a.ot_id, a.ot.numero if a.ot else 'OT sin número')
+        comp_key=(a.ot_componente_id or 0, a.componente.nombre if a.componente else 'Sin componente')
+        resumen.setdefault(ot_key,{}).setdefault(comp_key,{}).setdefault(a.tarea or 'Sin descripción',[]).append(a)
+    return render_template('planificacion.html',mes=mes,anio=anio,dias=dias,actividades=actividades,usuarios=usuarios,usuarios_pendientes=usuarios_pendientes,ots=aprobadas,carga=carga,inicio=inicio,resumen=resumen)
 
 @app.route('/api/planificacion/ot/<int:ot_id>')
 @permiso_required('planificacion')
@@ -793,7 +811,7 @@ def api_plan_ot(ot_id):
         reps=[]
         if c.componente_modelo_id:
             for r in ReparacionMaestra.query.filter_by(componente_modelo_id=c.componente_modelo_id,activo=True).order_by(ReparacionMaestra.secuencia,ReparacionMaestra.id).all():
-                asignaciones=PlanActividad.query.filter_by(ot_id=ot.id,ot_componente_id=c.id,reparacion_maestra_id=r.id).all()
+                asignaciones=asignaciones_reparacion(ot.id,c.id,r)
                 programadas=sum(((a.fecha_fin-a.fecha_inicio).days+1)*(a.horas_dia or 0) for a in asignaciones)
                 no_aplica=PlanNoAplica.query.filter_by(ot_id=ot.id,ot_componente_id=c.id,reparacion_maestra_id=r.id).first() is not None
                 estimadas=float(r.hh_estimadas or 0)
@@ -816,7 +834,7 @@ def plan_reparacion_estado():
     accion=request.form.get('accion')
     registro=PlanNoAplica.query.filter_by(ot_id=ot_id,ot_componente_id=comp_id,reparacion_maestra_id=rep_id).first()
     if accion=='no_aplica':
-        if PlanActividad.query.filter_by(ot_id=ot_id,ot_componente_id=comp_id,reparacion_maestra_id=rep_id).first():
+        if asignaciones_reparacion(ot_id,comp_id,rep):
             return jsonify({'error':'La reparación tiene horas programadas. Elimine primero sus asignaciones.'}),409
         if not registro:
             db.session.add(PlanNoAplica(ot_id=ot_id,ot_componente_id=comp_id,reparacion_maestra_id=rep_id,usuario=str(session.get('username',''))))

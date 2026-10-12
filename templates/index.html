@@ -1,15 +1,67 @@
 {% extends 'base.html' %}{% block c %}
+<style>
+.ot-wrap{overflow-x:auto;border:1px solid #dbe4ed;border-radius:10px;background:white;margin-top:12px}
+.ot-list{border-collapse:collapse;min-width:2450px;width:100%;font-size:12px}
+.ot-list th{background:#193b55;color:#fff;text-align:left;padding:10px 9px;white-space:nowrap;position:sticky;top:0;z-index:1}
+.ot-list td{padding:9px;border-bottom:1px solid #e3e9ee;vertical-align:top;line-height:1.4}
+.ot-list tr:hover td{background:#f2f8fc}
+.ot-list a{font-weight:700}.ot-sub{display:block;color:#64748b;font-size:11px;margin-top:3px}
+.ot-pill{display:inline-block;border-radius:12px;padding:3px 8px;background:#e8edf2;color:#34495e;white-space:nowrap}
+.ot-pill.ok{background:#dcfce7;color:#166534}.ot-pill.warn{background:#fff3cf;color:#865c08}
+.ot-worker{display:inline-flex;align-items:center;gap:5px;margin:2px 3px 2px 0;border:1px solid #d9e2ea;border-radius:13px;padding:2px 6px;white-space:nowrap}
+.ot-worker-dot{width:10px;height:10px;border-radius:50%;display:inline-block}
+.ot-controls{display:flex;gap:9px;flex-wrap:wrap;align-items:center;margin:13px 0}
+.ot-controls input,.ot-controls select{padding:9px;min-width:175px;border:1px solid #cbd5e1;border-radius:6px}
+.ot-controls input{flex:2;min-width:250px}.ot-controls select{flex:1}
+.ot-details{min-width:210px}.ot-details summary{cursor:pointer;color:#176184;font-weight:600}
+.ot-details ul{margin:5px 0 0;padding-left:16px}.ot-details li{margin:2px 0}
+.ot-count{color:#64748b;font-size:12px}
+.ot-num{white-space:nowrap}
+.ot-list .bar{min-width:80px}
+</style>
 <section class="hero"><div><img src="{{url_for('static',filename='img/logo-ingepro.png')}}"><h1>División Maestranza</h1><p>Gestión de reparaciones, trazabilidad, cotizaciones y control de componentes.</p></div></section>
 <div class="module-grid">
-{% if usuario_actual.puede('ingreso') %}<a class="module-card" href="#ot-listado"><b>OT</b><span>Crear una nueva orden de trabajo y registrar componentes recibidos.</span><strong>Crear · Buscar · Modificar</strong></a>{% endif %}
-{% if usuario_actual.puede('clientes') %}<a class="module-card" href="{{url_for('clientes')}}"><b>Clientes / Empresas</b><span>Empresas, RUT y contactos responsables de cotizaciones e informes.</span><strong>+ Crear empresa / contacto</strong></a>{% endif %}
-{% if usuario_actual.puede('cotizaciones') %}<a class="module-card" href="{{url_for('cotizaciones')}}"><b>Cotizaciones</b><span>Presupuestos vinculados a OT, PDF, aprobación y anulación.</span><strong>Ver cotizaciones</strong></a>{% endif %}
-{% if usuario_actual.puede('maestros') %}<a class="module-card" href="{{url_for('maestros_equipos')}}"><b>Maestro de Equipos</b><span>Tipo, marca, modelo, despiece, componentes y materiales.</span><strong>Administrar equipos</strong></a>{% endif %}
-{% if usuario_actual.puede('planificacion') %}<a class="module-card" href="{{url_for('planificacion')}}"><b>Planificación</b><span>Programación mensual, tareas por componente, responsables y carga diaria.</span><strong>Abrir planificación</strong></a>{% endif %}
-{% if usuario_actual.puede('usuarios') %}<a class="module-card" href="{{url_for('usuarios')}}"><b>Usuarios INGEPRO</b><span>Crear usuarios internos, cargos, accesos y permisos.</span><strong>+ Crear / administrar usuarios</strong></a>{% endif %}
+{% if usuario_actual.puede('ingreso') %}<a class="module-card" href="#ot-listado"><b>OT</b><span>Crear, buscar y modificar órdenes de trabajo.</span><strong>Ver órdenes</strong></a>{% endif %}
+{% if usuario_actual.puede('clientes') %}<a class="module-card" href="{{url_for('clientes')}}"><b>Clientes / Empresas</b><span>Empresas, RUT y contactos.</span><strong>Administrar</strong></a>{% endif %}
+{% if usuario_actual.puede('cotizaciones') %}<a class="module-card" href="{{url_for('cotizaciones')}}"><b>Cotizaciones</b><span>Presupuestos y aprobaciones.</span><strong>Ver cotizaciones</strong></a>{% endif %}
+{% if usuario_actual.puede('maestros') %}<a class="module-card" href="{{url_for('maestros_equipos')}}"><b>Maestro de Equipos</b><span>Modelos, componentes y materiales.</span><strong>Administrar</strong></a>{% endif %}
+{% if usuario_actual.puede('planificacion') %}<a class="module-card" href="{{url_for('planificacion')}}"><b>Planificación</b><span>Trabajos, responsables y horas.</span><strong>Abrir planificación</strong></a>{% endif %}
+{% if usuario_actual.puede('usuarios') %}<a class="module-card" href="{{url_for('usuarios')}}"><b>Usuarios INGEPRO</b><span>Personal, siglas, colores y permisos.</span><strong>Administrar</strong></a>{% endif %}
+{% if usuario_actual.puede('usuarios') %}<a class="module-card" href="{{url_for('gerencia')}}"><b>Control de Gerencia</b><span>Seguimiento comercial y operacional.</span><strong>Abrir gerencia</strong></a>{% endif %}
 </div>
-<div class="top" id="ot-listado"><div><h1>OT — Órdenes de trabajo</h1><p>Ingreso, diagnóstico, reparación, calidad y despacho.</p></div>{% if usuario_actual.puede('ingreso') %}<a class="btn" href="{{url_for('nueva_ot')}}">+ Ingresar equipo</a>{% endif %}</div>
-<div class="card" style="margin:12px 0"><a class="btn" href="{{url_for('nueva_ot')}}">Crear OT</a> <input id="buscar_ot" type="search" placeholder="Buscar OT, cliente, equipo o estado" aria-label="Buscar OT" style="max-width:380px;display:inline-block;margin-left:10px"><p class="muted">Para modificar una OT, abra su número en el listado. La anulación se habilitará después de definir sus reglas y permisos.</p></div><div class="cards"><div><strong>{{ots|length}}</strong><span>OT registradas</span></div><div><strong>{{ots|selectattr('estado','equalto','Diagnóstico')|list|length}}</strong><span>En diagnóstico</span></div><div><strong>{{ots|selectattr('estado','equalto','Aprobada / Reparación')|list|length}}</strong><span>En reparación</span></div></div>
-<table id="tabla_ot"><tr><th>OT</th><th>Cliente</th><th>Equipo / componente</th><th>Estado</th><th>Avance</th></tr>{% for o in ots %}<tr><td><a href="{{url_for('ver_ot',ot_id=o.id)}}"><b>{{o.numero}}</b></a></td><td>{{o.cliente}}</td><td>{{o.equipo}}<small>{{o.componente}}</small></td><td><span class="tag">{{o.estado}}</span></td><td><div class="bar"><i style="width:{{o.avance}}%"></i></div>{{o.avance}}%</td></tr>{% else %}<tr><td colspan="5" class="empty">Aún no hay OT. Ingresa el primer equipo.</td></tr>{% endfor %}</table>
-<script>const b=document.getElementById('buscar_ot');if(b)b.addEventListener('input',()=>{const q=b.value.toLocaleLowerCase('es').trim();document.querySelectorAll('#tabla_ot tr').forEach((tr,i)=>{if(i)tr.style.display=tr.textContent.toLocaleLowerCase('es').includes(q)?'':'none';});});</script>
+<div class="top" id="ot-listado"><div><h1>OT — Órdenes de trabajo</h1><p>Listado integral: ingreso, despiece, cotización, aprobación, reparación y despacho.</p></div>{% if usuario_actual.puede('ingreso') %}<a class="btn" href="{{url_for('nueva_ot')}}">+ Crear OT</a>{% endif %}</div>
+<div class="cards"><div><strong>{{ots|length}}</strong><span>OT registradas</span></div><div><strong>{{ots|selectattr('estado','equalto','Diagnóstico')|list|length}}</strong><span>En diagnóstico</span></div><div><strong>{{ots|selectattr('estado','equalto','Aprobada / Reparación')|list|length}}</strong><span>En reparación</span></div></div>
+<div class="ot-controls"><input id="buscar_ot" type="search" placeholder="Buscar OT, cliente, equipo, componente, cotización..." aria-label="Buscar OT"><select id="filtro_cot"><option value="">Todas las cotizaciones</option><option value="si">Cotizadas</option><option value="no">Sin cotizar</option></select><select id="filtro_aprob"><option value="">Todas las aprobaciones</option><option value="Aprobada">Aprobadas</option><option value="Pendiente">Pendientes</option><option value="Rechazada">Rechazadas</option><option value="Sin cotización">Sin cotización</option></select><select id="filtro_estado"><option value="">Todos los estados OT</option>{% for e in ['Diagnóstico','Cotización enviada','Aprobada / Reparación','Control de calidad','Checklist / Embalaje','Despachada','Cerrada'] %}<option value="{{e}}">{{e}}</option>{% endfor %}</select><button type="button" id="limpiar_ot">Limpiar filtros</button><span class="ot-count" id="conteo_ot"></span></div>
+<div class="ot-wrap"><table class="ot-list" id="tabla_ot"><thead><tr><th>OT INGEPRO</th><th>Cliente</th><th>Equipo / componentes</th><th>Ingreso</th><th>Referencia cliente / guía</th><th>Cotizada</th><th>N.º cotización</th><th>Monto neto CLP</th><th>Enviado a</th><th>Fecha envío</th><th>Aprobación</th><th>Fecha aprobación</th><th>Aprobado por</th><th>Estado reparación</th><th>Etapa actual</th><th>Responsable</th><th>Avance</th><th>Entrega</th><th>Documentación / ubicación</th><th>Acciones</th></tr></thead><tbody>
+{% for o in ots %}
+{% set q=cot_por_ot.get(o.id) %}{% set actividades=plan_por_ot.get(o.id,[]) %}
+{% set aprob=('Sin cotización' if not q else ('Aprobada' if q.estado=='Aprobada' else ('Rechazada' if q.estado=='Rechazada' else 'Pendiente'))) %}
+<tr class="ot-row" data-cot="{{'si' if q else 'no'}}" data-aprob="{{aprob}}" data-estado="{{o.estado}}">
+<td class="ot-num"><a href="{{url_for('ver_ot',ot_id=o.id)}}">{{o.numero}}</a></td>
+<td>{{o.cliente}}</td>
+<td><b>{{o.equipo}}</b>{% if o.componentes_detalle %}<details class="ot-details"><summary>{{o.componentes_detalle|length}} componentes · Ver todos</summary><ul>{% for c in o.componentes_detalle %}<li>{{c.nombre}} <span class="ot-sub">{{c.condicion_ingreso}} · {{c.resolucion}}</span></li>{% endfor %}</ul></details><span class="ot-sub">{% for c in o.componentes_detalle[:3] %}{{c.nombre}}{{' · ' if not loop.last else ''}}{% endfor %}{% if o.componentes_detalle|length>3 %} · +{{o.componentes_detalle|length-3}}{% endif %}</span>{% else %}<span class="ot-sub">{{o.componente or 'Sin despiece'}}</span>{% endif %}</td>
+<td>{{o.fecha.strftime('%d/%m/%Y') if o.fecha else '—'}}</td>
+<td>{{o.guia or '—'}}{% if o.serie %}<span class="ot-sub">Serie: {{o.serie}}</span>{% endif %}</td>
+<td><span class="ot-pill {{'ok' if q else ''}}">{{'Sí' if q else 'No'}}</span></td>
+<td>{% if q %}<a href="{{url_for('ver_cotizacion',qid=q.id)}}">{{q.numero}}</a>{% else %}—{% endif %}</td>
+<td>{{'{:,.0f}'.format(q.neto).replace(',','.') if q else '—'}}</td>
+<td>{{q.contacto if q and q.contacto else '—'}}</td>
+<td><span title="No existe fecha de envío independiente en la versión actual">—</span></td>
+<td><span class="ot-pill {{'ok' if aprob=='Aprobada' else ('warn' if aprob=='Pendiente' else '')}}">{{aprob}}</span></td>
+<td>{{q.fecha_aprobacion.strftime('%d/%m/%Y') if q and q.fecha_aprobacion else '—'}}</td>
+<td><span title="El nombre de quien aprobó requiere registro específico">—</span></td>
+<td><span class="ot-pill">{{o.estado}}</span></td>
+<td>{% if actividades %}{{actividades|sort(attribute='fecha_inicio')|last|attr('tarea')}}<span class="ot-sub">{{actividades|length}} asignaciones</span>{% else %}Sin programación{% endif %}</td>
+<td>{% set ns=namespace(ids=[]) %}{% for a in actividades %}{% if a.responsable and a.responsable.id not in ns.ids %}{% set ns.ids=ns.ids+[a.responsable.id] %}<span class="ot-worker"><span class="ot-worker-dot" style="background:{{a.responsable|color_trabajador}}"></span>{{a.responsable.sigla or a.responsable.nombre}}</span>{% endif %}{% endfor %}{% if not ns.ids %}—{% endif %}</td>
+<td><div class="bar"><i style="width:{{o.avance}}%"></i></div>{{o.avance}}% <span class="ot-sub" title="Avance por estado administrativo de OT, no ejecución física">Estado OT</span></td>
+<td>{{o.fecha_comprometida.strftime('%d/%m/%Y') if o.fecha_comprometida else '—'}}</td>
+<td><span class="ot-sub">Informe: {{'Sí' if o.hallazgos else 'No'}}</span><span class="ot-sub">Checklist: {{'Sí' if o.checklist else 'No'}}</span><span class="ot-sub">Ubicación: {% set ubicaciones=o.componentes_detalle|map(attribute='ubicacion')|select|list %}{{ubicaciones|join(', ') if ubicaciones else '—'}}</span></td>
+<td><a class="btn" href="{{url_for('ver_ot',ot_id=o.id)}}">Abrir / Modificar</a></td>
+</tr>
+{% else %}<tr><td colspan="20">Aún no hay OT registradas.</td></tr>{% endfor %}
+</tbody></table></div>
+<p class="ot-sub">Los campos sin registro disponible se muestran como «—». El avance indicado es el estado administrativo de la OT, no el porcentaje de ejecución física.</p>
+<script>
+(function(){const buscar=document.getElementById('buscar_ot'),cot=document.getElementById('filtro_cot'),aprob=document.getElementById('filtro_aprob'),estado=document.getElementById('filtro_estado'),rows=[...document.querySelectorAll('.ot-row')];function actualizar(){let n=0;const texto=buscar.value.toLocaleLowerCase('es').trim();rows.forEach(r=>{const ok=(!texto||r.textContent.toLocaleLowerCase('es').includes(texto))&&(!cot.value||r.dataset.cot===cot.value)&&(!aprob.value||r.dataset.aprob===aprob.value)&&(!estado.value||r.dataset.estado===estado.value);r.style.display=ok?'':'none';if(ok)n++});document.getElementById('conteo_ot').textContent=n+' OT visibles'}[buscar,cot,aprob,estado].forEach(x=>x.addEventListener('input',actualizar));document.getElementById('limpiar_ot').addEventListener('click',()=>{buscar.value='';cot.value='';aprob.value='';estado.value='';actualizar()});actualizar()})();
+</script>
 {% endblock %}

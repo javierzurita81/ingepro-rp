@@ -14,6 +14,22 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY','cambiar-esta-clave-en-produccion')
+# Color estable por trabajador: respeta el color configurado y evita gris uniforme
+# en usuarios históricos que todavía no tienen color guardado.
+COLORES_PLANIFICACION = ('#2563eb', '#16a34a', '#d97706', '#9333ea', '#dc2626', '#0891b2', '#be185d', '#4d7c0f', '#b45309', '#0f766e', '#7c3aed', '#1d4ed8', '#c2410c', '#047857', '#a21caf')
+
+@app.template_filter('color_trabajador')
+def color_trabajador(usuario):
+    if usuario is None:
+        return '#64748b'
+    valor = (getattr(usuario, 'color', None) or '').strip()
+    if len(valor) == 7 and valor.startswith('#') and all(c in '0123456789abcdefABCDEF' for c in valor[1:]):
+        return valor
+    identificador = getattr(usuario, 'id', None)
+    if isinstance(identificador, int) and identificador > 0:
+        return COLORES_PLANIFICACION[(identificador - 1) % len(COLORES_PLANIFICACION)]
+    return '#64748b'
+
 db_url = os.environ.get('DATABASE_URL', 'sqlite:///ingepro.db')
 if db_url.startswith('postgres://'): db_url = db_url.replace('postgres://','postgresql://',1)
 app.config['SQLALCHEMY_DATABASE_URI'] = db_url
@@ -353,7 +369,19 @@ def logout(): session.clear(); return redirect(url_for('login'))
 
 @app.route('/')
 @login_required
-def index(): return render_template('index.html',ots=OT.query.order_by(OT.id.desc()).all())
+def index():
+    ots=OT.query.order_by(OT.id.desc()).all()
+    ids=[o.id for o in ots]
+    cotizaciones=Cotizacion.query.filter(Cotizacion.ot_id.in_(ids)).order_by(Cotizacion.id.desc()).all() if ids else []
+    cot_por_ot={}
+    for q in cotizaciones:
+        if q.ot_id not in cot_por_ot and q.estado != 'Anulada':
+            cot_por_ot[q.ot_id]=q
+    actividades=PlanActividad.query.filter(PlanActividad.ot_id.in_(ids)).all() if ids else []
+    plan_por_ot={}
+    for a in actividades:
+        plan_por_ot.setdefault(a.ot_id,[]).append(a)
+    return render_template('index.html',ots=ots,cot_por_ot=cot_por_ot,plan_por_ot=plan_por_ot)
 
 @app.route('/usuarios')
 @permiso_required('usuarios')

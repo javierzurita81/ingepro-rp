@@ -709,12 +709,23 @@ def horas_ocupadas(usuario_id, dia, excluir_id=None):
     if excluir_id: q=q.filter(PlanActividad.id!=excluir_id)
     return sum(a.horas_dia or 0 for a in q.all() if a.estado!='Terminada')
 
+def limite_horas_dia(dia):
+    """Jornada operativa: lun-mié 9h, jue-vie 8h.
+    Sábado y domingo conservan provisionalmente el límite anterior (8h),
+    hasta definir su política en una versión posterior.
+    """
+    return 9.0 if dia.weekday() in (0, 1, 2) else 8.0
+
+
+app.jinja_env.globals['limite_horas_dia'] = limite_horas_dia
+app.jinja_env.globals['fecha_dia'] = date
+
 def validar_cupo(usuario, fi, ff, horas, excluir_id=None):
     if not usuario or not usuario.activo or not usuario.disponible_planificacion: return 'Seleccione un trabajador operativo habilitado.'
-    if ff<fi or horas<=0 or horas>8: return 'Verifique fechas y horas (máximo 8 horas por día).'
+    if ff<fi or horas<=0: return 'Verifique las fechas y horas de la actividad.'
     dia=fi
     while dia<=ff:
-        libres=max(0,8-horas_ocupadas(usuario.id,dia,excluir_id))
+        libres=max(0,limite_horas_dia(dia)-horas_ocupadas(usuario.id,dia,excluir_id))
         if horas>libres+0.0001:
             return f'{usuario.nombre}: el {dia.strftime("%d/%m/%Y")} solo tiene {libres:g} horas disponibles.'
         dia+=timedelta(days=1)
@@ -729,7 +740,7 @@ def api_plan_disponibilidad():
     usuario=db.session.get(Usuario,uid)
     if not usuario or not usuario.activo or not usuario.disponible_planificacion: return jsonify({'error':'Trabajador no habilitado'}),400
     ocupadas=horas_ocupadas(uid,dia,excluir or None)
-    return jsonify({'ocupadas':ocupadas,'disponibles':max(0,8-ocupadas),'fecha':dia.isoformat()})
+    return jsonify({'ocupadas':ocupadas,'limite':limite_horas_dia(dia),'disponibles':max(0,limite_horas_dia(dia)-ocupadas),'fecha':dia.isoformat()})
 
 def asignaciones_reparacion(ot_id, componente_id, reparacion):
     """Incluye actividades antiguas sin FK al maestro, por nombre exacto normalizado."""
@@ -995,12 +1006,24 @@ def api_gantt_rapido():
             if a.id==aid: continue
             if (rep_id and a.reparacion_maestra_id==rep_id) or (original and a.tarea==original.tarea):
                 return jsonify(error='Este trabajador ya está asignado a esta etapa ese día.'),409
-        if not original and rep:
-            prev=asignaciones_reparacion(ot_id,comp_id,rep)
-            if rep.hh_estimadas and sum(((a.fecha_fin-a.fecha_inicio).days+1)*(a.horas_dia or 0) for a in prev)+horas>float(rep.hh_estimadas)+0.0001:
-                return jsonify(error='Se exceden las HH estimadas de esta reparación.'),400
-            if not rep.hh_estimadas and prev:
-                return jsonify(error='Esta reparación ya tiene programación; edite la asignación existente.'),400
+        # Validar HH de la reparación tanto al CREAR como al EDITAR.
+        # La edición de una fecha en un rango solo sustituye las HH de ese día;
+        # el resto del rango conserva su programación.
+        rep_control=rep or (original.reparacion if original else None)
+        if rep_control:
+            prev=asignaciones_reparacion(ot_id,comp_id,rep_control)
+            estimadas=float(rep_control.hh_estimadas or 0)
+            total_actual=sum(((a.fecha_fin-a.fecha_inicio).days+1)*float(a.horas_dia or 0) for a in prev)
+            hh_anterior=float(original.horas_dia or 0) if original and original in prev else 0.0
+            total_nuevo=total_actual-hh_anterior+horas
+            if estimadas>0 and total_nuevo>estimadas+0.0001:
+                disponibles=max(0.0,estimadas-(total_actual-hh_anterior))
+                return jsonify(error=(f'HH estimadas: {estimadas:g}. '
+                    f'Programadas sin esta casilla: {total_actual-hh_anterior:g}. '
+                    f'Disponibles: {disponibles:g} HH. '
+                    f'Solicitadas: {horas:g} HH.')),400
+            if not estimadas and not original and prev:
+                return jsonify(error='Esta reparación ya tiene programación; revise las asignaciones existentes.'),400
     # Una asignación de varios días se divide para cambiar únicamente la fecha elegida.
     if original:
         start,end=original.fecha_inicio,original.fecha_fin

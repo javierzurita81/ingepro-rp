@@ -369,19 +369,7 @@ def logout(): session.clear(); return redirect(url_for('login'))
 
 @app.route('/')
 @login_required
-def index():
-    ots=OT.query.order_by(OT.id.desc()).all()
-    ids=[o.id for o in ots]
-    cotizaciones=Cotizacion.query.filter(Cotizacion.ot_id.in_(ids)).order_by(Cotizacion.id.desc()).all() if ids else []
-    cot_por_ot={}
-    for q in cotizaciones:
-        if q.ot_id not in cot_por_ot and q.estado != 'Anulada':
-            cot_por_ot[q.ot_id]=q
-    actividades=PlanActividad.query.filter(PlanActividad.ot_id.in_(ids)).all() if ids else []
-    plan_por_ot={}
-    for a in actividades:
-        plan_por_ot.setdefault(a.ot_id,[]).append(a)
-    return render_template('index.html',ots=ots,cot_por_ot=cot_por_ot,plan_por_ot=plan_por_ot)
+def index(): return render_template('index.html',ots=OT.query.order_by(OT.id.desc()).all())
 
 @app.route('/usuarios')
 @permiso_required('usuarios')
@@ -891,6 +879,52 @@ def planificacion():
             grupo['total_hh']+=(a.horas_dia or 0)
             dia+=timedelta(days=1)
     return render_template('planificacion.html',mes=mes,anio=anio,dias=dias,actividades=actividades,usuarios=usuarios,usuarios_pendientes=usuarios_pendientes,ots=aprobadas,carga=carga,inicio=inicio,resumen=resumen)
+
+
+@app.route('/planificacion/gantt')
+@permiso_required('planificacion')
+def planificacion_gantt():
+    import calendar
+    hoy=date.today()
+    try:
+        mes=int(request.args.get('mes') or hoy.month)
+        anio=int(request.args.get('anio') or hoy.year)
+        inicio=date(anio,mes,1)
+    except (ValueError,TypeError): abort(400)
+    fin=date(anio,mes,calendar.monthrange(anio,mes)[1])
+    trabajadores=operarios_planificables()
+    aprobadas=[]
+    for ot in OT.query.order_by(OT.fecha.desc(),OT.id.desc()).all():
+        q=Cotizacion.query.filter(Cotizacion.ot_id==ot.id,Cotizacion.estado!='Anulada').order_by(Cotizacion.id.desc()).first()
+        ec=(q.estado or '').strip().casefold() if q else ''
+        eo=(ot.aprobacion or '').strip().casefold()
+        if ec=='rechazada': continue
+        if ec in ('aprobada','aprobado') or (q and eo in ('aprobada','aprobado')):
+            aprobadas.append(ot)
+    lista=[]
+    for ot in aprobadas:
+        componentes=[]
+        for c in ot.componentes_detalle:
+            if (c.condicion_ingreso or '').strip().casefold()!='recibido': continue
+            etapas=[]
+            maestros=ReparacionMaestra.query.filter_by(componente_modelo_id=c.componente_modelo_id,activo=True).order_by(ReparacionMaestra.secuencia,ReparacionMaestra.id).all() if c.componente_modelo_id else []
+            for r in maestros:
+                if PlanNoAplica.query.filter_by(ot_id=ot.id,ot_componente_id=c.id,reparacion_maestra_id=r.id).first(): continue
+                acts=asignaciones_reparacion(ot.id,c.id,r)
+                etapas.append({'nombre':r.nombre,'rep_id':r.id,'actividades':acts,'estimadas':float(r.hh_estimadas or 0)})
+            # Mantener visibles actividades históricas o manuales no presentes en el maestro.
+            ids={a.id for e in etapas for a in e['actividades']}
+            for a in PlanActividad.query.filter_by(ot_id=ot.id,ot_componente_id=c.id).all():
+                if a.id not in ids: etapas.append({'nombre':a.tarea or 'Actividad histórica','rep_id':None,'actividades':[a],'estimadas':0})
+            if etapas: componentes.append({'nombre':c.nombre,'id':c.id,'etapas':etapas})
+        if componentes: lista.append({'id':ot.id,'numero':ot.numero,'componentes':componentes})
+    import json as _json
+    def ajson(a):
+        return {'id':a.id,'worker':a.usuario_id,'start':a.fecha_inicio.isoformat(),'end':a.fecha_fin.isoformat(),'hours':a.horas_dia,'sigla':a.responsable.sigla if a.responsable else '?'}
+    data=[{'id':o['id'],'numero':o['numero'],'components':[{'id':c['id'],'nombre':c['nombre'],'tasks':[{'name':e['nombre'],'rep':e['rep_id'],'assignments':[ajson(a) for a in e['actividades']]} for e in c['etapas']]} for c in o['componentes']]} for o in lista]
+    workers=[{'id':u.id,'name':u.nombre,'sigla':u.sigla or u.nombre[:2],'color':(u.color or '#64748b')} for u in trabajadores]
+    return render_template('planificacion_gantt.html',gantt_data=data,gantt_workers=workers,mes=mes,anio=anio)
+
 
 @app.route('/api/planificacion/ot/<int:ot_id>')
 @permiso_required('planificacion')

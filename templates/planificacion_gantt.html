@@ -3,7 +3,7 @@
 .gantt-app{background:#fff;border:1px solid #d8dce2;border-radius:9px;overflow:hidden;color:#202733;font:11px Arial,sans-serif}
 .gantt-head{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;padding:15px 16px;gap:12px}.gantt-head h2{font-size:17px;margin:0 0 5px}.gantt-head p{margin:0;color:#667085;font-size:11px}
 .gantt-controls{display:flex;align-items:center;gap:10px}.gantt-controls a,.gantt-controls button{background:white;border:1px solid #cbd5e1;padding:7px 11px;border-radius:6px;text-decoration:none;color:#26313e;cursor:pointer}.gantt-month{min-width:135px;text-align:center;font-size:13px;font-weight:700}
-.gantt-actions{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:0 16px 10px;flex-wrap:wrap}.gantt-actions button{font-size:11px;background:#fff;border:1px solid #cbd5e1;border-radius:5px;padding:6px 9px;cursor:pointer}
+.gantt-actions{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:0 16px 10px;flex-wrap:wrap}.gantt-actions a{display:inline-block;padding:7px 10px;border:1px solid #cbd5e1;border-radius:5px;text-decoration:none;color:#26313e;font-size:11px;margin-left:6px}.gantt-actions .gantt-summary-link{background:#1c5fb9;color:#fff;border-color:#1c5fb9}.gantt-actions button{font-size:11px;background:#fff;border:1px solid #cbd5e1;border-radius:5px;padding:6px 9px;cursor:pointer}
 .gantt-viewport{overflow:auto;max-height:76vh;border-top:1px solid #cbd5e1;border-bottom:1px solid #cbd5e1;scrollbar-color:#9299a3 #e9eaec}
 .gantt-table{display:table!important;overflow:visible!important;border-radius:0!important;border-collapse:separate;border-spacing:0;table-layout:fixed;width:max-content;min-width:100%;font:11px Arial,sans-serif}
 .gantt-table thead{display:table-header-group!important}.gantt-table tbody{display:table-row-group!important}.gantt-table tr{display:table-row!important}.gantt-table th,.gantt-table td{display:table-cell!important;box-sizing:border-box;height:30px;border-right:1px solid #e9ecf0;border-bottom:1px solid #e9ecf0;padding:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -20,13 +20,13 @@
 </style>
 <div class="gantt-app">
  <div class="gantt-head"><div><h2>INGEPRO RP · Planificación general</h2><p>Carta Gantt de reparaciones · Vista compacta · OT aprobadas</p></div><div class="gantt-controls"><a id="gantt-prev" href="#">‹</a><div class="gantt-month" id="gantt-month"></div><a id="gantt-next" href="#">›</a></div></div>
- <div class="gantt-actions"><span id="gantt-count"></span><div><button id="gantt-expand" type="button">Expandir todas</button> <button id="gantt-collapse" type="button">Contraer todas</button> <a href="{{url_for('planificacion',mes=mes,anio=anio)}}" style="margin-left:8px">Vista anterior</a></div></div>
+ <div class="gantt-actions"><span id="gantt-count"></span><div><button id="gantt-expand" type="button">Expandir todas</button> <button id="gantt-collapse" type="button">Contraer todas</button> <a class="gantt-summary-link" href="{{url_for('planificacion_resumen',mes=mes,anio=anio)}}">Resumen</a> <a class="gantt-legacy-link" href="{{'/planificacion/detalle?mes=' ~ mes ~ '&anio=' ~ anio}}">Herramientas avanzadas</a></div></div>
  <div class="gantt-viewport" id="gantt-viewport"><table class="gantt-table" id="gantt-table"></table></div>
  <div class="gantt-legend" id="gantt-legend"></div><div class="gantt-note">Desplaza horizontalmente solo los días. Haz clic en una casilla para programar o editar. Las OT y componentes permanecen fijos.</div>
 </div>
-<dialog class="gantt-dialog" id="gantt-dialog"><h3 id="gantt-title" style="margin:0;font-size:15px"></h3><p id="gantt-sub" style="font-size:12px;color:#667085"></p><form method="post" id="gantt-form" action="{{url_for('planificacion',mes=mes,anio=anio)}}">
+<dialog class="gantt-dialog" id="gantt-dialog"><h3 id="gantt-title" style="margin:0;font-size:15px"></h3><p id="gantt-sub" style="font-size:12px;color:#667085"></p><form id="gantt-form">
 <input type="hidden" name="ot_id" id="gantt-ot"><input type="hidden" name="ot_componente_id" id="gantt-comp"><input type="hidden" name="reparacion_maestra_id" id="gantt-rep"><input type="hidden" name="fecha_inicio" id="gantt-start"><input type="hidden" name="fecha_fin" id="gantt-end">
-<label>Trabajador</label><select name="usuario_id" id="gantt-worker" required></select><label>Horas planificadas</label><input type="number" min="0.5" max="9" step="0.5" name="horas_dia" id="gantt-hours" value="2" required><input type="hidden" name="estado" value="Planificada"><footer><button type="button" id="gantt-cancel">Cancelar</button><button type="submit">Guardar</button></footer></form></dialog>
+<label>Trabajador</label><select name="usuario_id" id="gantt-worker" required></select><label>Horas planificadas</label><input type="number" min="0.5" max="9" step="0.5" name="horas_dia" id="gantt-hours" value="2" required><input type="hidden" name="estado" value="Planificada"><div id="gantt-error" style="color:#b42318;font-size:11px;margin-top:8px" role="alert"></div><footer><button type="button" id="gantt-delete" style="margin-right:auto">Eliminar</button><button type="button" id="gantt-cancel">Cancelar</button><button type="submit">Guardar</button></footer></form></dialog>
 <script>
 const GOTS={{ gantt_data|tojson }}, GW={{ gantt_workers|tojson }}, YEAR={{anio}}, MONTH={{mes}};
 const months=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
@@ -37,7 +37,38 @@ function row(type,label,meta){const tr=document.createElement('tr');tr.className
  for(let d=1;d<=last;d++){const dow=new Date(YEAR,MONTH-1,d).getDay();const td=document.createElement(type==='head'?'th':'td');td.className='gantt-day'+([0,6].includes(dow)?' gantt-weekend':'');if(type==='head'){td.innerHTML=d+'<div style="font-size:9px;color:#667085">'+weekdays[dow]+'</div>'}if(type==='task'){const date=`${YEAR}-${String(MONTH).padStart(2,'0')}-${String(d).padStart(2,'0')}`;const found=meta.task.assignments.filter(a=>a.start<=date&&a.end>=date);if(found.length){const a=found[0],w=GW.find(w=>w.id===a.worker);td.innerHTML=`<div class="gantt-entry"><span>${esc(w?.sigla||a.sigla)} ${a.hours}h${found.length>1?' +'+(found.length-1):''}</span><i class="gantt-bar" style="background:${esc(w?.color||'#64748b')}"></i></div>`}else td.textContent='·';td.onclick=()=>openEditor(meta,date,found)}tr.appendChild(td)}return tr}
 function render(){const x=viewport.scrollLeft;const cols=document.createElement('colgroup');const fixed=document.createElement('col');fixed.style.width='205px';cols.appendChild(fixed);for(let d=1;d<=last;d++){const col=document.createElement('col');col.style.width='43px';cols.appendChild(col)}const head=document.createElement('thead');head.appendChild(row('head','OT / Componente / Etapa'));const body=document.createElement('tbody');for(const o of GOTS){body.appendChild(row('ot',(expanded.has(o.id)?'▾ ':'▸ ')+o.numero,o));if(!expanded.has(o.id))continue;for(const c of o.components){body.appendChild(row('comp',c.nombre));for(const t of c.tasks)body.appendChild(row('task',t.name,{ot:o,comp:c,task:t}))}}table.replaceChildren(cols,head,body);document.getElementById('gantt-count').textContent=`${expanded.size} de ${GOTS.length} OT desplegadas`;viewport.scrollLeft=x}
 const dialog=document.getElementById('gantt-dialog');document.getElementById('gantt-worker').innerHTML=GW.map(w=>`<option value="${w.id}">${esc(w.sigla)} · ${esc(w.name)}</option>`).join('');
-function openEditor(meta,date,found){if(found.length){window.location.href='/planificacion/'+found[0].id+'/editar';return}if(!meta.task.rep){alert('Esta tarea histórica debe editarse desde la vista anterior.');return}document.getElementById('gantt-title').textContent=meta.task.name;document.getElementById('gantt-sub').textContent=meta.ot.numero+' · '+meta.comp.nombre+' · '+date;document.getElementById('gantt-ot').value=meta.ot.id;document.getElementById('gantt-comp').value=meta.comp.id;document.getElementById('gantt-rep').value=meta.task.rep;document.getElementById('gantt-start').value=date;document.getElementById('gantt-end').value=date;dialog.showModal()}
+let currentCell=null;
+function openEditor(meta,date,found){
+ const a=found.length?found[0]:null;
+ if(!a&&!meta.task.rep){alert('Esta tarea histórica solo admite editar asignaciones existentes.');return}
+ currentCell={meta,date,assignment:a};
+ document.getElementById('gantt-title').textContent=meta.task.name;
+ document.getElementById('gantt-sub').textContent=meta.ot.numero+' · '+meta.comp.nombre+' · '+date;
+ document.getElementById('gantt-ot').value=meta.ot.id;
+ document.getElementById('gantt-comp').value=meta.comp.id;
+ document.getElementById('gantt-rep').value=meta.task.rep||'';
+ document.getElementById('gantt-start').value=date;
+ document.getElementById('gantt-end').value=date;
+ document.getElementById('gantt-worker').value=a?.worker||GW[0]?.id||'';
+ document.getElementById('gantt-hours').value=a?.hours||2;
+ document.getElementById('gantt-delete').style.display=a?'':'none';
+ document.getElementById('gantt-error').textContent=found.length>1?'Hay varios responsables; se editará el primero.':'';
+ dialog.showModal();
+}
+async function submitQuick(action){
+ if(!currentCell)return;
+ const {meta,date,assignment}=currentCell;
+ const payload={accion:action,fecha:date,ot_id:meta.ot.id,componente_id:meta.comp.id,reparacion_id:meta.task.rep,asignacion_id:assignment?.id||null,usuario_id:document.getElementById('gantt-worker').value,horas:document.getElementById('gantt-hours').value};
+ const error=document.getElementById('gantt-error');error.textContent='';
+ try{
+  const response=await fetch({{url_for('api_gantt_rapido')|tojson}},{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  const result=await response.json();
+  if(!response.ok||!result.ok){error.textContent=result.error||'No se pudo guardar.';return}
+  dialog.close();window.location.reload();
+ }catch(e){error.textContent='Error de conexión. No se han guardado los cambios.'}
+}
+document.getElementById('gantt-form').addEventListener('submit',e=>{e.preventDefault();submitQuick('guardar')});
+document.getElementById('gantt-delete').onclick=()=>submitQuick('eliminar');
 document.getElementById('gantt-cancel').onclick=()=>dialog.close();document.getElementById('gantt-expand').onclick=()=>{GOTS.forEach(o=>expanded.add(o.id));render()};document.getElementById('gantt-collapse').onclick=()=>{expanded.clear();render()};
 const nav=(delta)=>{let d=new Date(YEAR,MONTH-1+delta,1);return '?mes='+(d.getMonth()+1)+'&anio='+d.getFullYear()};document.getElementById('gantt-prev').href=nav(-1);document.getElementById('gantt-next').href=nav(1);document.getElementById('gantt-month').textContent=months[MONTH-1]+' '+YEAR;
 document.getElementById('gantt-legend').innerHTML=GW.map(w=>`<span><i style="background:${esc(w.color)}"></i>${esc(w.sigla)} · ${esc(w.name)}</span>`).join('');render();

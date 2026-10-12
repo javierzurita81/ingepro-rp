@@ -796,8 +796,11 @@ def gerencia():
     return render_template('gerencia.html',filas=filas)
 
 @app.route('/planificacion',methods=['GET','POST'])
+@app.route('/planificacion/detalle',methods=['GET','POST'])
 @permiso_required('planificacion')
 def planificacion():
+    if request.method=='GET' and request.path.rstrip('/')=='/planificacion':
+        return redirect(url_for('planificacion_gantt', **{k:request.args[k] for k in ('mes','anio') if k in request.args}))
     hoy=date.today(); mes=int(request.args.get('mes') or hoy.month); anio=int(request.args.get('anio') or hoy.year)
     if request.method=='POST':
         ot=db.session.get(OT,int(request.form['ot_id'])) or abort(404); comp_id=int(request.form.get('ot_componente_id') or 0) or None; rep_id=int(request.form.get('reparacion_maestra_id') or 0) or None
@@ -881,6 +884,35 @@ def planificacion():
     return render_template('planificacion.html',mes=mes,anio=anio,dias=dias,actividades=actividades,usuarios=usuarios,usuarios_pendientes=usuarios_pendientes,ots=aprobadas,carga=carga,inicio=inicio,resumen=resumen)
 
 
+@app.route('/planificacion/resumen')
+@permiso_required('planificacion')
+def planificacion_resumen():
+    import calendar
+    hoy=date.today()
+    try:
+        mes=int(request.args.get('mes',hoy.month)); anio=int(request.args.get('anio',hoy.year))
+        inicio=date(anio,mes,1); fin=date(anio,mes,calendar.monthrange(anio,mes)[1])
+    except (ValueError,OverflowError):
+        abort(400)
+    actividades=PlanActividad.query.filter(PlanActividad.fecha_inicio<=fin,PlanActividad.fecha_fin>=inicio).all()
+    por_persona={}; ot_ids=set(); total=0; por_estado={}
+    for actividad in actividades:
+        d=max(actividad.fecha_inicio,inicio); hasta=min(actividad.fecha_fin,fin)
+        if d>hasta: continue
+        hh=((hasta-d).days+1)*float(actividad.horas_dia or 0)
+        total+=hh;ot_ids.add(actividad.ot_id)
+        estado=actividad.estado or 'Sin estado';por_estado[estado]=por_estado.get(estado,0)+1
+        u=actividad.responsable
+        clave=actividad.usuario_id
+        item=por_persona.setdefault(clave,{'nombre':u.nombre if u else 'Sin responsable','sigla':u.sigla if u else '—','color':u.color if u and u.color else '#64748b','hh':0,'dias':{}})
+        item['hh']+=hh
+        while d<=hasta:
+            item['dias'][d.day]=item['dias'].get(d.day,0)+float(actividad.horas_dia or 0)
+            d+=timedelta(days=1)
+    personas=sorted(por_persona.values(),key=lambda x:x['nombre'])
+    return render_template('planificacion_resumen.html',mes=mes,anio=anio,total=total,ots=len(ot_ids),actividades=len(actividades),personas=personas,por_estado=por_estado)
+
+
 @app.route('/planificacion/gantt')
 @permiso_required('planificacion')
 def planificacion_gantt():
@@ -924,6 +956,70 @@ def planificacion_gantt():
     data=[{'id':o['id'],'numero':o['numero'],'components':[{'id':c['id'],'nombre':c['nombre'],'tasks':[{'name':e['nombre'],'rep':e['rep_id'],'assignments':[ajson(a) for a in e['actividades']]} for e in c['etapas']]} for c in o['componentes']]} for o in lista]
     workers=[{'id':u.id,'name':u.nombre,'sigla':u.sigla or u.nombre[:2],'color':(u.color or '#64748b')} for u in trabajadores]
     return render_template('planificacion_gantt.html',gantt_data=data,gantt_workers=workers,mes=mes,anio=anio)
+
+
+@app.route('/api/planificacion/gantt/rapido', methods=['POST'])
+@permiso_required('planificacion')
+def api_gantt_rapido():
+    """Edición por día sin salir de la carta Gantt; conserva los demás días de rangos."""
+    data=request.get_json(silent=True) or {}
+    try:
+        dia=date.fromisoformat(str(data['fecha']))
+        ot_id=int(data['ot_id']); comp_id=int(data['componente_id'])
+        rep_id=int(data['reparacion_id']) if data.get('reparacion_id') else None
+        aid=int(data['asignacion_id']) if data.get('asignacion_id') else None
+        accion=data.get('accion','guardar')
+        uid=int(data['usuario_id']) if accion=='guardar' else None
+        horas=float(data['horas']) if accion=='guardar' else None
+    except (KeyError,ValueError,TypeError): return jsonify(error='Datos inválidos.'),400
+    if accion not in ('guardar','eliminar'): return jsonify(error='Acción no válida.'),400
+    ot=db.session.get(OT,ot_id); comp=db.session.get(OTComponente,comp_id)
+    if not ot or not comp or comp.ot_id!=ot_id or (comp.condicion_ingreso or '').casefold()!='recibido':
+        return jsonify(error='OT o componente no disponible.'),400
+    original=db.session.get(PlanActividad,aid) if aid else None
+    if aid and (not original or original.ot_id!=ot_id or original.ot_componente_id!=comp_id or not(original.fecha_inicio<=dia<=original.fecha_fin)):
+        return jsonify(error='La asignación ya no corresponde a esta casilla.'),409
+    rep=db.session.get(ReparacionMaestra,rep_id) if rep_id else None
+    if not original and (not rep or not rep.activo or rep.componente_modelo_id!=comp.componente_modelo_id):
+        return jsonify(error='La etapa no admite una asignación nueva.'),400
+    if not original and PlanNoAplica.query.filter_by(ot_id=ot_id,ot_componente_id=comp_id,reparacion_maestra_id=rep_id).first():
+        return jsonify(error='Esta reparación está marcada No aplica.'),400
+    if accion=='eliminar' and not original: return jsonify(error='No hay asignación que eliminar.'),400
+    usuario=db.session.get(Usuario,uid) if uid else None
+    if accion=='guardar':
+        error=validar_cupo(usuario,dia,dia,horas,excluir_id=aid)
+        if error: return jsonify(error=error),400
+        # No duplicar el mismo trabajador en una etapa el mismo día.
+        similares=PlanActividad.query.filter(PlanActividad.ot_id==ot_id,PlanActividad.ot_componente_id==comp_id,PlanActividad.usuario_id==uid,PlanActividad.fecha_inicio<=dia,PlanActividad.fecha_fin>=dia).all()
+        for a in similares:
+            if a.id==aid: continue
+            if (rep_id and a.reparacion_maestra_id==rep_id) or (original and a.tarea==original.tarea):
+                return jsonify(error='Este trabajador ya está asignado a esta etapa ese día.'),409
+        if not original and rep:
+            prev=asignaciones_reparacion(ot_id,comp_id,rep)
+            if rep.hh_estimadas and sum(((a.fecha_fin-a.fecha_inicio).days+1)*(a.horas_dia or 0) for a in prev)+horas>float(rep.hh_estimadas)+0.0001:
+                return jsonify(error='Se exceden las HH estimadas de esta reparación.'),400
+            if not rep.hh_estimadas and prev:
+                return jsonify(error='Esta reparación ya tiene programación; edite la asignación existente.'),400
+    # Una asignación de varios días se divide para cambiar únicamente la fecha elegida.
+    if original:
+        start,end=original.fecha_inicio,original.fecha_fin
+        if start!=end:
+            def clonar(fi,ff):
+                return PlanActividad(ot_id=original.ot_id,ot_componente_id=original.ot_componente_id,reparacion_maestra_id=original.reparacion_maestra_id,usuario_id=original.usuario_id,tarea=original.tarea,fecha_inicio=fi,fecha_fin=ff,horas_dia=original.horas_dia,estado=original.estado,observacion=original.observacion)
+            if start<dia: db.session.add(clonar(start,dia-timedelta(days=1)))
+            if dia<end: db.session.add(clonar(dia+timedelta(days=1),end))
+            original.fecha_inicio=dia;original.fecha_fin=dia
+    if accion=='eliminar': db.session.delete(original)
+    elif original:
+        original.usuario_id=uid;original.horas_dia=horas
+    else:
+        db.session.add(PlanActividad(ot_id=ot_id,ot_componente_id=comp_id,reparacion_maestra_id=rep_id,usuario_id=uid,tarea=rep.nombre,fecha_inicio=dia,fecha_fin=dia,horas_dia=horas,estado='Planificada'))
+        if not OTReparacionSeleccionada.query.filter_by(ot_id=ot_id,ot_componente_id=comp_id,reparacion_maestra_id=rep_id).first():
+            db.session.add(OTReparacionSeleccionada(ot_id=ot_id,ot_componente_id=comp_id,reparacion_maestra_id=rep_id))
+    db.session.commit()
+    audit('Gantt edición rápida',f'OT {ot.numero} / {dia.isoformat()} / {accion}')
+    return jsonify(ok=True)
 
 
 @app.route('/api/planificacion/ot/<int:ot_id>')

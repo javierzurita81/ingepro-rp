@@ -726,6 +726,59 @@ def asignaciones_reparacion(ot_id, componente_id, reparacion):
     return [a for a in registros if a.reparacion_maestra_id==reparacion.id or
             (a.reparacion_maestra_id is None and normalizar(a.tarea)==nombre)]
 
+@app.route('/gerencia')
+@login_required
+def gerencia():
+    # Información sensible comercial: únicamente administradores o usuarios con permiso de cotizaciones.
+    if not (usuario_actual().es_admin or usuario_actual().puede('cotizaciones')): abort(403)
+    ots=OT.query.order_by(OT.fecha.desc(), OT.id.desc()).all()
+    cotizaciones=Cotizacion.query.filter(Cotizacion.estado!='Anulada').order_by(Cotizacion.id.desc()).all()
+    cot_por_ot={}
+    for q in cotizaciones: cot_por_ot.setdefault(q.ot_id,q)
+    actividades=PlanActividad.query.order_by(PlanActividad.fecha_inicio,PlanActividad.id).all()
+    act_por_ot={}
+    for a in actividades: act_por_ot.setdefault(a.ot_id,[]).append(a)
+    no_aplica=PlanNoAplica.query.all()
+    no_aplica_por_comp={}
+    for n in no_aplica: no_aplica_por_comp.setdefault(n.ot_componente_id,set()).add(n.reparacion_maestra_id)
+    filas=[]
+    for ot in ots:
+        q=cot_por_ot.get(ot.id)
+        actividades_ot=act_por_ot.get(ot.id,[])
+        componentes=[]
+        for comp in ot.componentes_detalle:
+            if (comp.condicion_ingreso or '').strip().casefold()=='no recibido': continue
+            tareas=[a for a in actividades_ot if a.ot_componente_id==comp.id]
+            etapas={}
+            for a in tareas:
+                key=a.reparacion_maestra_id or ('manual', (a.tarea or '').strip().casefold())
+                etapa=etapas.setdefault(key,{'nombre':a.reparacion.nombre if a.reparacion else (a.tarea or 'Actividad sin descripción'),'asignaciones':[],'estados':set()})
+                etapa['asignaciones'].append(a)
+                etapa['estados'].add((a.estado or 'Planificada').strip().casefold())
+            maestras=ReparacionMaestra.query.filter_by(componente_modelo_id=comp.componente_modelo_id,activo=True).order_by(ReparacionMaestra.secuencia,ReparacionMaestra.id).all() if comp.componente_modelo_id else []
+            ignoradas=no_aplica_por_comp.get(comp.id,set())
+            for m in maestras:
+                if m.id in ignoradas: continue
+                etapas.setdefault(m.id,{'nombre':m.nombre,'asignaciones':[],'estados':set()})
+            finalizadas=sum(1 for e in etapas.values() if e['asignaciones'] and e['estados'] and e['estados'].issubset({'finalizada','finalizado','terminada','terminado','completada','completado'}))
+            activas=sum(1 for e in etapas.values() if e['asignaciones'])
+            if not etapas: estado='Sin programación'
+            elif finalizadas==len(etapas): estado='Finalizada'
+            elif any(('ejecuci' in estado or estado=='en proceso') for e in etapas.values() for estado in e['estados']): estado='En ejecución'
+            elif activas: estado='Programada'
+            else: estado='Sin programación'
+            componentes.append({'componente':comp,'etapas':list(etapas.values()),'estado':estado,'avance':round(finalizadas/len(etapas)*100) if etapas else 0,'programadas':activas,'total':len(etapas)})
+        if not componentes and actividades_ot:
+            # Actividades antiguas sin componente vinculado: no ocultarlas.
+            etapas=[{'nombre':a.reparacion.nombre if a.reparacion else a.tarea,'asignaciones':[a]} for a in actividades_ot if not a.ot_componente_id]
+            if etapas: componentes.append({'componente':None,'etapas':etapas,'estado':'Programada','avance':0,'programadas':len(etapas),'total':len(etapas)})
+        total=sum(c['total'] for c in componentes)
+        final=sum(round(c['avance']*c['total']/100) for c in componentes)
+        etapa_actual=next((e['nombre'] for c in componentes for e in c['etapas'] if e['asignaciones'] and not all((a.estado or '').strip().casefold() in ('finalizada','finalizado','terminada','terminado','completada','completado') for a in e['asignaciones'])), None)
+        if not etapa_actual: etapa_actual='Sin programación' if not actividades_ot else ('Finalizada' if total and final==total else 'Ver componentes')
+        filas.append({'ot':ot,'cot':q,'componentes':componentes,'etapa_actual':etapa_actual,'avance':round(final/total*100) if total else 0,'plan_estado':('Finalizada' if total and final==total else 'En ejecución' if any(c['estado']=='En ejecución' for c in componentes) else 'Programada' if actividades_ot else 'Sin programación')})
+    return render_template('gerencia.html',filas=filas)
+
 @app.route('/planificacion',methods=['GET','POST'])
 @permiso_required('planificacion')
 def planificacion():

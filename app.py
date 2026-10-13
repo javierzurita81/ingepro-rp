@@ -375,9 +375,71 @@ def login():
 @app.route('/logout')
 def logout(): session.clear(); return redirect(url_for('login'))
 
+def listado_control_ot():
+    """Listado administrativo de OT con los mismos filtros para pantalla y Excel."""
+    ots=OT.query.order_by(OT.id.desc()).all()
+    ids=[o.id for o in ots]
+    cotizaciones=Cotizacion.query.filter(Cotizacion.ot_id.in_(ids),Cotizacion.estado!='Anulada').order_by(Cotizacion.id.desc()).all() if ids else []
+    por_ot={}
+    for q in cotizaciones:
+        por_ot.setdefault(q.ot_id,q)
+    planes=set(x[0] for x in db.session.query(PlanActividad.ot_id).filter(PlanActividad.ot_id.in_(ids)).distinct().all()) if ids else set()
+    filas=[]
+    for o in ots:
+        q=por_ot.get(o.id)
+        diag=bool((o.diagnostico or '').strip() or o.hallazgos)
+        qe=(q.estado or '').casefold() if q else ''
+        aprobado=qe=='aprobada'
+        if o.fecha_entrega_faena and (o.recibido_por or '').strip(): estado='Entregada'
+        elif (o.despacho or '').strip() and (o.guia or '').strip(): estado='Despachada'
+        elif (o.control_calidad or '').strip() and (o.checklist or '').strip(): estado='Lista para despacho'
+        elif (o.reparacion or '').strip(): estado='En reparación'
+        elif o.id in planes and aprobado: estado='Planificada'
+        elif qe=='rechazada': estado='Cotización rechazada'
+        elif aprobado: estado='Aprobada'
+        elif qe=='presupuesto enviado': estado='Cotización enviada'
+        elif q: estado='Cotizada'
+        elif diag: estado='Diagnosticada'
+        else: estado='En diagnóstico'
+        filas.append(dict(ot=o,cot=q,estado=estado,precio=q.neto if q else None))
+    buscar=(request.args.get('buscar') or '').strip().casefold()
+    filtro=(request.args.get('estado') or '').strip()
+    if buscar:
+        filas=[r for r in filas if buscar in ' '.join(str(x or '') for x in (r['ot'].numero,r['ot'].cliente,r['ot'].equipo,r['ot'].componente,r['ot'].serie,r['ot'].ot_cliente if hasattr(r['ot'],'ot_cliente') else '',r['cot'].numero if r['cot'] else '')).casefold()]
+    if filtro:
+        filas=[r for r in filas if r['estado']==filtro]
+    return filas
+
 @app.route('/')
 @login_required
-def index(): return render_template('index.html',ots=OT.query.order_by(OT.id.desc()).all())
+def index():
+    filas=listado_control_ot()
+    return render_template('index.html',filas=filas,buscar=request.args.get('buscar',''),filtro=request.args.get('estado',''))
+
+@app.route('/ot')
+@login_required
+def control_general_ot():
+    filas=listado_control_ot()
+    return render_template('index.html',filas=filas,buscar=request.args.get('buscar',''),filtro=request.args.get('estado',''),solo_ot=True)
+
+@app.route('/ot/exportar-excel')
+@permiso_required('ingreso')
+def exportar_ot_excel():
+    from openpyxl import Workbook
+    from openpyxl.styles import Font,PatternFill,Alignment
+    wb=Workbook(); ws=wb.active; ws.title='Control OT'
+    columnas=['OT INGEPRO','Fecha ingreso','Cliente','Equipo','Componente','Serie','OT cliente','Guía despacho','Cotización','Fecha cotización','Precio neto CLP','Estado','Fecha envío cotización','Enviado por','Enviado a','Fecha entrega faena','Recibido por','Revisado faena INGEPRO']
+    ws.append(columnas)
+    for r in listado_control_ot():
+        o=r['ot']; q=r['cot']
+        ws.append([o.numero,o.fecha.date() if o.fecha else None,o.cliente,o.equipo,o.componente,o.serie,getattr(o,'ot_cliente',None),o.guia,q.numero if q else None,q.fecha.date() if q and q.fecha else None,r['precio'],r['estado'],o.fecha_envio_cotizacion,o.enviado_por,o.enviado_a,o.fecha_entrega_faena,o.recibido_por,o.revisado_faena_por])
+    for c in ws[1]: c.font=Font(bold=True,color='FFFFFF');c.fill=PatternFill('solid',fgColor='17365D');c.alignment=Alignment(wrap_text=True)
+    for col in ws.columns:
+        letter=col[0].column_letter
+        ws.column_dimensions[letter].width=min(38,max(15,max(len(str(c.value or '')) for c in col[:100])+2))
+    ws.freeze_panes='A2';ws.auto_filter.ref=ws.dimensions
+    buf=BytesIO();wb.save(buf);buf.seek(0)
+    return send_file(buf,as_attachment=True,download_name='INGEPRO_Control_OT.xlsx',mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
 @app.route('/usuarios')
 @permiso_required('usuarios')

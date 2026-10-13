@@ -952,9 +952,9 @@ def planificacion_gantt():
             etapas=[]
             maestros=ReparacionMaestra.query.filter_by(componente_modelo_id=c.componente_modelo_id,activo=True).order_by(ReparacionMaestra.secuencia,ReparacionMaestra.id).all() if c.componente_modelo_id else []
             for r in maestros:
-                if PlanNoAplica.query.filter_by(ot_id=ot.id,ot_componente_id=c.id,reparacion_maestra_id=r.id).first(): continue
+                na=PlanNoAplica.query.filter_by(ot_id=ot.id,ot_componente_id=c.id,reparacion_maestra_id=r.id).first() is not None
                 acts=asignaciones_reparacion(ot.id,c.id,r)
-                etapas.append({'nombre':r.nombre,'rep_id':r.id,'actividades':acts,'estimadas':float(r.hh_estimadas or 0)})
+                etapas.append({'nombre':r.nombre,'rep_id':r.id,'actividades':acts,'estimadas':float(r.hh_estimadas or 0),'no_aplica':na})
             # Mantener visibles actividades históricas o manuales no presentes en el maestro.
             ids={a.id for e in etapas for a in e['actividades']}
             for a in PlanActividad.query.filter_by(ot_id=ot.id,ot_componente_id=c.id).all():
@@ -964,9 +964,79 @@ def planificacion_gantt():
     import json as _json
     def ajson(a):
         return {'id':a.id,'worker':a.usuario_id,'start':a.fecha_inicio.isoformat(),'end':a.fecha_fin.isoformat(),'hours':a.horas_dia,'sigla':a.responsable.sigla if a.responsable else '?'}
-    data=[{'id':o['id'],'numero':o['numero'],'components':[{'id':c['id'],'nombre':c['nombre'],'tasks':[{'name':e['nombre'],'rep':e['rep_id'],'assignments':[ajson(a) for a in e['actividades']]} for e in c['etapas']]} for c in o['componentes']]} for o in lista]
+    data=[{'id':o['id'],'numero':o['numero'],'components':[{'id':c['id'],'nombre':c['nombre'],'tasks':[{'name':e['nombre'],'rep':e['rep_id'],'assignments':[ajson(a) for a in e['actividades']],'no_aplica':e.get('no_aplica',False)} for e in c['etapas']]} for c in o['componentes']]} for o in lista]
     workers=[{'id':u.id,'name':u.nombre,'sigla':u.sigla or u.nombre[:2],'color':(u.color or '#64748b')} for u in trabajadores]
     return render_template('planificacion_gantt.html',gantt_data=data,gantt_workers=workers,mes=mes,anio=anio)
+
+
+@app.route('/planificacion/gantt/pdf/<tipo>')
+@permiso_required('planificacion')
+def planificacion_gantt_pdf(tipo):
+    """Exporta programación vigente desde PostgreSQL, no desde datos de demostración."""
+    from io import BytesIO
+    import calendar
+    from flask import send_file
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A3, A4, landscape
+    from reportlab.lib.styles import getSampleStyleSheet
+    if tipo not in ('mensual','trabajador'): abort(404)
+    try:
+        mes=int(request.args.get('mes',date.today().month)); anio=int(request.args.get('anio',date.today().year))
+        inicio=date(anio,mes,1); fin=date(anio,mes,calendar.monthrange(anio,mes)[1])
+        trabajador_id=int(request.args.get('trabajador_id') or 0)
+    except (TypeError,ValueError): abort(400)
+    usuario=db.session.get(Usuario,trabajador_id) if tipo=='trabajador' else None
+    if tipo=='trabajador' and not usuario: abort(400)
+    buffer=BytesIO(); page=landscape(A3 if tipo=='mensual' else A4)
+    doc=SimpleDocTemplate(buffer,pagesize=page,leftMargin=20,rightMargin=20,topMargin=25,bottomMargin=25)
+    styles=getSampleStyleSheet(); story=[]
+    titulo='PLANIFICACIÓN MENSUAL GENERAL' if tipo=='mensual' else 'PLANIFICACIÓN INDIVIDUAL · '+usuario.nombre
+    story.append(Paragraph('INGEPRO · DIVISIÓN MAESTRANZA',styles['Heading2']))
+    story.append(Paragraph(f'{titulo} · {mes:02d}/{anio}',styles['Heading3']))
+    story.append(Spacer(1,9))
+    if tipo=='mensual':
+        encabezado=['OT / COMPONENTE / ETAPA','ESTADO']+[str(d) for d in range(1,fin.day+1)]
+        filas=[encabezado]
+        ots=OT.query.order_by(OT.numero).all()
+        for ot in ots:
+            q=Cotizacion.query.filter(Cotizacion.ot_id==ot.id,Cotizacion.estado!='Anulada').order_by(Cotizacion.id.desc()).first()
+            if not q or ((q.estado or '').strip().casefold() not in ('aprobada','aprobado') and (ot.aprobacion or '').strip().casefold() not in ('aprobada','aprobado')):continue
+            for c in ot.componentes_detalle:
+                if (c.condicion_ingreso or '').strip().casefold()!='recibido' or not c.componente_modelo_id:continue
+                reps=ReparacionMaestra.query.filter_by(componente_modelo_id=c.componente_modelo_id,activo=True).order_by(ReparacionMaestra.secuencia,ReparacionMaestra.id).all()
+                if not reps:continue
+                filas.append([f'{ot.numero} / {c.nombre}'[:49],'']+['']*fin.day)
+                for rep in reps:
+                    na=PlanNoAplica.query.filter_by(ot_id=ot.id,ot_componente_id=c.id,reparacion_maestra_id=rep.id).first() is not None
+                    row=[rep.nombre[:49],'N/A' if na else 'Aplica']+['']*fin.day
+                    if not na:
+                        for a in asignaciones_reparacion(ot.id,c.id,rep):
+                            for d in range(1,fin.day+1):
+                                fecha=date(anio,mes,d)
+                                if a.fecha_inicio<=fecha<=a.fecha_fin:
+                                    v=f'{(a.responsable.sigla or "?") if a.responsable else "?"} {float(a.horas_dia or 0):g}h'
+                                    row[d+1]=(row[d+1]+' / '+v).strip(' /')
+                    filas.append(row)
+        if len(filas)==1:filas.append(['Sin reparaciones aprobadas para mostrar','']+['']*fin.day)
+        ancho=(page[0]-40-260-43)/fin.day
+        tabla=Table(filas,colWidths=[260,43]+[ancho]*fin.day,repeatRows=1,hAlign='LEFT')
+        tabla.setStyle(TableStyle([('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),('FONTSIZE',(0,0),(-1,-1),5),('BACKGROUND',(0,0),(-1,0),colors.HexColor('#e0e3e8')),('GRID',(0,0),(-1,-1),.2,colors.HexColor('#d6dbe1')),('VALIGN',(0,0),(-1,-1),'MIDDLE'),('ROWBACKGROUNDS',(0,1),(-1,-1),[colors.white,colors.HexColor('#f8fafc')])]))
+    else:
+        acts=PlanActividad.query.filter(PlanActividad.usuario_id==usuario.id,PlanActividad.fecha_inicio<=fin,PlanActividad.fecha_fin>=inicio).order_by(PlanActividad.fecha_inicio,PlanActividad.ot_id).all()
+        filas=[['FECHA','OT','COMPONENTE','ETAPA','HORAS']]
+        total=0.0
+        for a in acts:
+            for d in range(1,fin.day+1):
+                fecha=date(anio,mes,d)
+                if a.fecha_inicio<=fecha<=a.fecha_fin:
+                    filas.append([fecha.strftime('%d/%m/%Y'),a.ot.numero if a.ot else '',a.componente.nombre[:28] if a.componente else '',a.tarea[:43],f'{float(a.horas_dia or 0):g}'])
+                    total+=float(a.horas_dia or 0)
+        filas.append(['TOTAL','','','',f'{total:g}'])
+        tabla=Table(filas,colWidths=[85,95,165,255,55],repeatRows=1,hAlign='LEFT')
+        tabla.setStyle(TableStyle([('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),('BACKGROUND',(0,0),(-1,0),colors.HexColor('#e0e3e8')),('GRID',(0,0),(-1,-1),.3,colors.HexColor('#d6dbe1')),('FONTSIZE',(0,0),(-1,-1),8),('ROWBACKGROUNDS',(0,1),(-1,-1),[colors.white,colors.HexColor('#f8fafc')])]))
+    story.append(tabla);doc.build(story);buffer.seek(0)
+    return send_file(buffer,mimetype='application/pdf',as_attachment=True,download_name=f'INGEPRO_{tipo}_{anio}_{mes:02d}.pdf')
 
 
 @app.route('/api/planificacion/gantt/rapido', methods=['POST'])
@@ -1070,14 +1140,16 @@ def api_plan_ot(ot_id):
 @app.route('/api/planificacion/reparacion/estado',methods=['POST'])
 @permiso_required('planificacion')
 def plan_reparacion_estado():
+    payload=request.get_json(silent=True) if request.is_json else request.form
+    payload=payload or {}
     try:
-        ot_id=int(request.form.get('ot_id') or 0)
-        comp_id=int(request.form.get('ot_componente_id') or 0)
-        rep_id=int(request.form.get('reparacion_maestra_id') or 0)
-    except ValueError: abort(400)
+        ot_id=int(payload.get('ot_id') or 0)
+        comp_id=int(payload.get('ot_componente_id') or 0)
+        rep_id=int(payload.get('reparacion_maestra_id') or 0)
+    except (ValueError,TypeError): abort(400)
     ot=db.session.get(OT,ot_id); comp=db.session.get(OTComponente,comp_id); rep=db.session.get(ReparacionMaestra,rep_id)
     if not ot or not comp or comp.ot_id!=ot_id or not rep or rep.componente_modelo_id!=comp.componente_modelo_id: abort(400)
-    accion=request.form.get('accion')
+    accion=payload.get('accion')
     registro=PlanNoAplica.query.filter_by(ot_id=ot_id,ot_componente_id=comp_id,reparacion_maestra_id=rep_id).first()
     if accion=='no_aplica':
         if asignaciones_reparacion(ot_id,comp_id,rep):

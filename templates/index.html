@@ -8,13 +8,30 @@
 {% if usuario_actual.puede('planificacion') %}<a class="module-card" href="{{url_for('planificacion_gantt')}}"><b>Planificación</b><span>Carta Gantt compacta, etapas Aplica/No aplica, responsables y PDF mensual.</span><strong>Abrir planificación</strong></a>{% endif %}
 {% if usuario_actual.puede('usuarios') %}<a class="module-card" href="{{url_for('usuarios')}}"><b>Usuarios INGEPRO</b><span>Crear usuarios internos, cargos, accesos y permisos.</span><strong>+ Crear / administrar usuarios</strong></a>{% endif %}
 </div>{% endif %}
-<section class="card" id="ot-listado" style="margin-top:18px;padding:18px">
- <div class="ot-list-head"><div><h2 style="margin:0">INGEPRO RP · Control general de OT</h2><p class="muted" style="margin:5px 0">Ingreso · Diagnóstico · Cotización · Reparación · Despacho · Entrega</p></div><div class="actionrow">{% if usuario_actual.puede('ingreso') %}<a class="btn primary" href="{{url_for('nueva_ot')}}">+ Nueva OT</a><a class="btn secondary" href="{{url_for('exportar_ot_excel',buscar=buscar,estado=filtro)}}">↓ Descargar Excel</a>{% endif %}</div></div>
- <form method="get" action="{{url_for('control_general_ot') if solo_ot else url_for('index')}}" class="ot-list-filters"><input name="buscar" type="search" value="{{buscar}}" placeholder="Buscar OT, cliente, equipo, cotización..."><select name="estado"><option value="">Todos los estados</option>{% for e in ['En diagnóstico','Diagnosticada','Cotizada','Cotización enviada','Aprobada','Cotización rechazada','Planificada','En reparación','Lista para despacho','Despachada','Entregada'] %}<option value="{{e}}" {% if filtro==e %}selected{% endif %}>{{e}}</option>{% endfor %}</select><button class="btn primary" type="submit">Filtrar</button><a class="btn secondary" href="{{url_for('control_general_ot') if solo_ot else url_for('index')}}">Limpiar</a></form>
- <p class="muted" style="font-size:12px;margin:8px 0">{{filas|length}} OT encontradas · El archivo Excel utiliza los mismos filtros.</p>
- <div class="tablewrap"><table class="ot-list-table"><thead><tr><th>OT INGEPRO</th><th>Equipo / componente</th><th>Cliente</th><th>OT cliente</th><th>Cotización</th><th>Precio neto</th><th>Condición actual</th><th>Fecha envío</th><th>Enviado por</th><th>Entrega faena</th><th>Detalle</th></tr></thead><tbody>
- {% for r in filas %}{% set o=r.ot %}{% set q=r.cot %}<tr><td><a href="{{url_for('ver_ot',ot_id=o.id)}}"><b>{{o.numero}}</b></a></td><td><b>{{o.equipo}}</b><small>{{o.componente}}</small></td><td>{{o.cliente}}</td><td>{{o.ot_cliente if o.ot_cliente is defined and o.ot_cliente else '—'}}</td><td>{{q.numero if q else '—'}}</td><td class="ot-money">{% if r.precio is not none %}${{'{:,.0f}'.format(r.precio).replace(',','.')}}{% else %}—{% endif %}</td><td><span class="ot-list-state {% if r.estado in ['Aprobada','Entregada','Lista para despacho'] %}ok{% elif r.estado in ['Cotización rechazada'] %}bad{% elif r.estado in ['En diagnóstico','En reparación'] %}pending{% endif %}">{{r.estado}}</span></td><td>{{o.fecha_envio_cotizacion.strftime('%d/%m/%Y') if o.fecha_envio_cotizacion else '—'}}</td><td>{{o.enviado_por or '—'}}</td><td>{{o.fecha_entrega_faena.strftime('%d/%m/%Y') if o.fecha_entrega_faena else '—'}}</td><td><a class="btn secondary" href="{{url_for('ver_ot',ot_id=o.id)}}">Ver</a></td></tr>
- {% else %}<tr><td colspan="11" class="empty">No hay órdenes de trabajo que coincidan con los filtros.</td></tr>{% endfor %}
+<section class="card ot-compact-panel" id="ot-listado">
+ <div class="ot-list-head"><div><h2>INGEPRO RP · Control general de OT</h2><p class="muted">Ingreso · Diagnóstico · Cotización · Reparación · Despacho · Entrega</p></div>
+ <div class="ot-list-actions">{% if usuario_actual.puede('ingreso') %}<a class="btn primary ot-compact-btn" href="{{url_for('nueva_ot')}}">+ Nueva OT</a>{% endif %}<a id="ot-excel-link" class="btn secondary ot-compact-btn ot-excel" href="{{url_for('exportar_ot_excel',buscar=buscar,estado=filtro)}}">↓ Excel</a></div></div>
+ <form id="ot-auto-filter" method="get" action="{{url_for('control_general_ot') if solo_ot else url_for('index')}}" class="ot-list-filters">
+ <input name="buscar" type="search" value="{{buscar}}" placeholder="Buscar OT, cliente, equipo, cotización..." aria-label="Buscar órdenes de trabajo" autocomplete="off">
+ <select name="estado" aria-label="Filtrar por condición"><option value="">Todos los estados</option>{% for e in ['En diagnóstico','Diagnosticada','Cotizada','Cotización enviada','Aprobada','Cotización rechazada','Planificada','En reparación','Lista para despacho','Despachada','Entregada'] %}<option value="{{e}}" {% if filtro==e %}selected{% endif %}>{{e}}</option>{% endfor %}</select>
+ <a class="ot-clear-link" href="{{url_for('control_general_ot') if solo_ot else url_for('index')}}">↻ Limpiar</a></form>
+ <p class="muted ot-count">{{filas|length}} OT encontradas · Excel respeta los filtros.</p>
+ <div class="tablewrap ot-tablewrap"><table class="ot-list-table"><colgroup><col class="col-ot"><col class="col-equipo"><col class="col-cliente"><col class="col-otcliente"><col class="col-cot"><col class="col-precio"><col class="col-estado"><col class="col-envio"><col class="col-por"><col class="col-entrega"></colgroup>
+ <thead><tr><th>OT INGEPRO</th><th>Equipo / componente</th><th>Cliente</th><th>OT cliente</th><th>Cotización</th><th>Precio neto</th><th>Condición<br>actual</th><th>Fecha<br>envío</th><th>Enviado<br>por</th><th>Entrega<br>en faena</th></tr></thead><tbody>
+ {% for r in filas %}{% set o=r.ot %}{% set q=r.cot %}<tr><td><a href="{{url_for('ver_ot',ot_id=o.id)}}" class="ot-number-link">{{o.numero}}</a></td><td><strong>{{o.equipo}}</strong><small>{{o.componente}}</small></td><td>{{o.cliente}}</td><td>{{o.ot_cliente if o.ot_cliente is defined and o.ot_cliente else '—'}}</td><td>{{q.numero if q else '—'}}</td><td class="ot-money">{% if r.precio is not none %}${{'{:,.0f}'.format(r.precio).replace(',','.')}}{% else %}—{% endif %}</td><td><span class="ot-list-state {% if r.estado in ['Aprobada','Entregada','Lista para despacho'] %}ok{% elif r.estado in ['Cotización rechazada'] %}bad{% elif r.estado in ['En diagnóstico','En reparación'] %}pending{% endif %}">{{r.estado}}</span></td><td>{{o.fecha_envio_cotizacion.strftime('%d/%m/%Y') if o.fecha_envio_cotizacion else '—'}}</td><td>{{o.enviado_por or '—'}}</td><td>{{o.fecha_entrega_faena.strftime('%d/%m/%Y') if o.fecha_entrega_faena else '—'}}</td></tr>
+ {% else %}<tr class="ot-empty-row"><td colspan="10" class="empty">No hay órdenes de trabajo que coincidan con los filtros.</td></tr>{% endfor %}
  </tbody></table></div>
 </section>
+<script>
+(function(){
+ const form=document.getElementById('ot-auto-filter');if(!form)return;
+ const input=form.querySelector('input[name="buscar"]');const select=form.querySelector('select[name="estado"]');
+ const excel=document.getElementById('ot-excel-link');let timer;
+ function syncExcel(){if(!excel)return;const u=new URL(excel.href,location.href);u.searchParams.set('buscar',input.value);u.searchParams.set('estado',select.value);excel.href=u.toString()}
+ function apply(){syncExcel();form.requestSubmit()}
+ input.addEventListener('input',()=>{clearTimeout(timer);syncExcel();timer=setTimeout(apply,550)});
+ select.addEventListener('change',()=>{clearTimeout(timer);apply()});
+ form.addEventListener('submit',syncExcel);
+})();
+</script>
 {% endblock %}

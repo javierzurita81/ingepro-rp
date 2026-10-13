@@ -808,9 +808,10 @@ def gerencia():
 
 @app.route('/planificacion',methods=['GET','POST'])
 @app.route('/planificacion/detalle',methods=['GET','POST'])
+@app.route('/planificacion/administracion',methods=['GET','POST'])
 @permiso_required('planificacion')
 def planificacion():
-    if request.method=='GET' and request.path.rstrip('/')=='/planificacion':
+    if request.method=='GET' and request.path.rstrip('/') in ('/planificacion', '/planificacion/detalle'):
         return redirect(url_for('planificacion_gantt', **{k:request.args[k] for k in ('mes','anio') if k in request.args}))
     hoy=date.today(); mes=int(request.args.get('mes') or hoy.month); anio=int(request.args.get('anio') or hoy.year)
     if request.method=='POST':

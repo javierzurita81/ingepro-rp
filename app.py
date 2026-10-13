@@ -210,6 +210,12 @@ class OT(db.Model):
     cotizacion=db.Column(db.String(80)); aprobacion=db.Column(db.String(30), default='Pendiente'); reparacion=db.Column(db.Text); control_calidad=db.Column(db.Text)
     checklist=db.Column(db.String(120)); embalaje=db.Column(db.Text); despacho=db.Column(db.Text)
     fecha_comprometida=db.Column(db.Date)
+    fecha_entrega_faena=db.Column(db.Date)
+    recibido_por=db.Column(db.String(160))
+    revisado_faena_por=db.Column(db.String(160))
+    fecha_envio_cotizacion=db.Column(db.Date)
+    enviado_por=db.Column(db.String(160))
+    enviado_a=db.Column(db.String(160))
     modelo_equipo=db.relationship('ModeloEquipo')
     componentes_detalle=db.relationship('OTComponente', backref='ot', cascade='all, delete-orphan', lazy=True)
     hallazgos=db.relationship('DiagnosticoHallazgo', backref='ot', cascade='all, delete-orphan', lazy=True, order_by='DiagnosticoHallazgo.id')
@@ -313,6 +319,8 @@ def asegurar_columnas():
         cols={c['name'] for c in insp.get_columns('ot')}
         if 'fecha_comprometida' not in cols: db.session.execute(text('ALTER TABLE ot ADD COLUMN fecha_comprometida DATE'))
         if 'modelo_id' not in cols: db.session.execute(text('ALTER TABLE ot ADD COLUMN modelo_id INTEGER'))
+        for n,t in {'fecha_entrega_faena':'DATE','recibido_por':'VARCHAR(160)','revisado_faena_por':'VARCHAR(160)','fecha_envio_cotizacion':'DATE','enviado_por':'VARCHAR(160)','enviado_a':'VARCHAR(160)'}.items():
+            if n not in cols: db.session.execute(text(f'ALTER TABLE ot ADD COLUMN {n} {t}'))
     if 'cliente' in insp.get_table_names():
         cols={c['name'] for c in insp.get_columns('cliente')}
         defs={'nombre_comercial':'VARCHAR(120)','rut':'VARCHAR(20)','direccion':'VARCHAR(200)','comuna':'VARCHAR(100)','ciudad':'VARCHAR(100)','giro':'VARCHAR(180)','telefono':'VARCHAR(60)','email':'VARCHAR(140)'}
@@ -466,25 +474,86 @@ def ot_cargar_despiece(ot_id):
     flash(f'Despiece {modelo.marca} {modelo.modelo} cargado: {n} componentes. Marca ahora qué elementos fueron recibidos.')
     return redirect(url_for('ver_ot',ot_id=ot.id))
 
+def seguimiento_ot(ot):
+    """Estados derivados de registros reales; no se pueden marcar manualmente."""
+    q=Cotizacion.query.filter(Cotizacion.ot_id==ot.id,Cotizacion.estado!='Anulada').order_by(Cotizacion.id.desc()).first()
+    diag=bool((ot.diagnostico or '').strip() or ot.hallazgos)
+    cot=bool(q)
+    enviada=bool(q and (q.estado or '').strip().casefold() in ('presupuesto enviado','aprobada','rechazada'))
+    aprobada=bool(q and (q.estado or '').strip().casefold()=='aprobada')
+    rechazada=bool(q and (q.estado or '').strip().casefold()=='rechazada')
+    actividades=PlanActividad.query.filter_by(ot_id=ot.id).first() if aprobada else None
+    plan=bool(actividades)
+    reparacion=bool((ot.reparacion or '').strip())
+    calidad=bool((ot.control_calidad or '').strip() and (ot.checklist or '').strip())
+    despacho=bool((ot.despacho or '').strip() and (ot.guia or '').strip())
+    entrega=bool(ot.fecha_entrega_faena and (ot.recibido_por or '').strip())
+    definiciones=[
+      ('Ingreso','Equipo y OT cliente',True,'ver_ot','ingreso'),
+      ('Diagnóstico','Informe técnico',diag,'diagnostico_ot','diagnostico'),
+      ('Cotización','Precio y documento',cot,'ver_cotizacion' if q else 'cotizacion_nueva','cotizaciones'),
+      ('Envío cotización','Fecha y destinatario',enviada,'ver_cotizacion' if q else 'cotizacion_nueva','cotizaciones'),
+      ('Aprobación','Autorización cliente',aprobada,'ver_cotizacion' if q else 'cotizacion_nueva','cotizaciones'),
+      ('Planificación','Gantt compacto',plan,'planificacion_gantt','planificacion'),
+      ('Reparación','Trabajos por componente',reparacion,'ot_reparaciones','reparacion'),
+      ('Control calidad','Inspección y pruebas',calidad,'ver_ot','calidad'),
+      ('Despacho','Guía y salida',despacho,'ver_ot','despacho'),
+      ('Entregada','Fecha y recepción',entrega,'ver_ot','despacho')]
+    pasos=[]
+    for i,(nombre,descripcion,hecho,endpoint,permiso) in enumerate(definiciones):
+        previo=all(x['completo'] for x in pasos)
+        estado='completa' if hecho and previo else ('pendiente' if previo and not rechazada else 'bloqueada')
+        if i==0: estado='completa'
+        if endpoint=='ver_cotizacion' and q: href=url_for(endpoint,qid=q.id)
+        elif endpoint=='cotizacion_nueva': href=url_for(endpoint,ot_id=ot.id)
+        elif endpoint in ('diagnostico_ot','ot_reparaciones'): href=url_for(endpoint,ot_id=ot.id)
+        elif endpoint=='planificacion_gantt': href=url_for(endpoint,ot_id=ot.id)
+        else: href=url_for('ver_ot',ot_id=ot.id, _anchor='ot-'+('entrega' if i==9 else 'control' if i==7 else 'despacho' if i==8 else 'datos'))
+        pasos.append(dict(nombre=nombre,descripcion=descripcion,completo=bool(hecho and previo),estado=estado,href=href,permitido=usuario_actual().puede(permiso)))
+    if rechazada: condicion='Cotización rechazada'
+    elif entrega: condicion='Entregada'
+    elif despacho: condicion='Despachada'
+    elif calidad: condicion='Lista para despacho'
+    elif reparacion: condicion='En reparación'
+    elif plan: condicion='Planificada'
+    elif aprobada: condicion='Aprobada'
+    elif enviada: condicion='Cotización enviada'
+    elif cot: condicion='Cotizada'
+    elif diag: condicion='Diagnosticada'
+    else: condicion='En diagnóstico'
+    return pasos,condicion,q
+
 @app.route('/ot/<int:ot_id>',methods=['GET','POST'])
 @login_required
 def ver_ot(ot_id):
     ot=db.session.get(OT,ot_id) or abort(404)
     if request.method=='POST':
-        for f in ['diagnostico','cotizacion','aprobacion','reparacion','control_calidad','checklist','embalaje','despacho','estado']:
+        for f in ['diagnostico','reparacion','control_calidad','checklist','embalaje','despacho']:
             if f in request.form:setattr(ot,f,request.form.get(f))
         for c in ot.componentes_detalle:
             c.condicion_ingreso=request.form.get(f'condicion_{c.id}',c.condicion_ingreso)
             c.resolucion=request.form.get(f'resolucion_{c.id}',c.resolucion)
             c.material=request.form.get(f'material_{c.id}',c.material or '').strip()
             c.ubicacion=request.form.get(f'ubicacion_{c.id}',c.ubicacion or '').strip()
+        if 'fecha_entrega_faena' in request.form:
+            raw=request.form.get('fecha_entrega_faena','').strip()
+            try: ot.fecha_entrega_faena=date.fromisoformat(raw) if raw else None
+            except ValueError: flash('Fecha de entrega inválida.'); return redirect(url_for('ver_ot',ot_id=ot.id))
+            for f in ('recibido_por','revisado_faena_por','enviado_por','enviado_a'):
+                if f in request.form: setattr(ot,f,request.form.get(f,'').strip()[:160])
+            raw_envio=request.form.get('fecha_envio_cotizacion','').strip()
+            try: ot.fecha_envio_cotizacion=date.fromisoformat(raw_envio) if raw_envio else None
+            except ValueError: flash('Fecha de envío inválida.'); return redirect(url_for('ver_ot',ot_id=ot.id))
+            if ot.fecha_entrega_faena and not (ot.recibido_por or '').strip():
+                flash('Para registrar la entrega debes indicar quién recibió el equipo.'); return redirect(url_for('ver_ot',ot_id=ot.id))
         db.session.commit(); audit('OT actualizada',ot.numero); flash('OT actualizada'); return redirect(url_for('ver_ot',ot_id=ot.id))
     if not ot.componentes_detalle:
         modelo=inferir_modelo_ot(ot)
         if modelo:
             cargar_despiece_ot(ot,modelo); db.session.commit()
     modelos=ModeloEquipo.query.filter_by(activo=True).order_by(ModeloEquipo.tipo,ModeloEquipo.marca,ModeloEquipo.modelo).all()
-    return render_template('ot.html',ot=ot,modelos=modelos)
+    pasos,condicion,q=seguimiento_ot(ot)
+    return render_template('ot.html',ot=ot,modelos=modelos,pasos=pasos,condicion=condicion,cot_activa=q)
 
 
 @app.route('/ot/<int:ot_id>/vincular-componente', methods=['POST'])
@@ -815,7 +884,12 @@ def planificacion():
         return redirect(url_for('planificacion_gantt', **{k:request.args[k] for k in ('mes','anio') if k in request.args}))
     hoy=date.today(); mes=int(request.args.get('mes') or hoy.month); anio=int(request.args.get('anio') or hoy.year)
     if request.method=='POST':
-        ot=db.session.get(OT,int(request.form['ot_id'])) or abort(404); comp_id=int(request.form.get('ot_componente_id') or 0) or None; rep_id=int(request.form.get('reparacion_maestra_id') or 0) or None
+        ot=db.session.get(OT,int(request.form['ot_id'])) or abort(404)
+        q_activa=Cotizacion.query.filter(Cotizacion.ot_id==ot.id,Cotizacion.estado=='Aprobada').first()
+        if not q_activa:
+            flash('La OT requiere una cotización aprobada para planificar trabajos.')
+            return redirect(url_for('ver_ot',ot_id=ot.id))
+        comp_id=int(request.form.get('ot_componente_id') or 0) or None; rep_id=int(request.form.get('reparacion_maestra_id') or 0) or None
         rep=db.session.get(ReparacionMaestra,rep_id) if rep_id else None
         tarea=(rep.nombre if rep else '').strip(); fi=datetime.strptime(request.form['fecha_inicio'],'%Y-%m-%d').date(); ff=datetime.strptime(request.form['fecha_fin'],'%Y-%m-%d').date()
         try: horas=float(request.form.get('horas_dia') or 0)
@@ -1267,6 +1341,9 @@ def cotizacion_nueva(ot_id):
     if activa:
         flash(f'Esta OT ya tiene una cotización activa: {activa.numero}.')
         return redirect(url_for('ver_cotizacion',qid=activa.id))
+    if not ((ot.diagnostico or '').strip() or ot.hallazgos):
+        flash('Debes registrar un diagnóstico antes de crear la cotización.')
+        return redirect(url_for('diagnostico_ot',ot_id=ot.id))
     if request.method=='POST':
         q=Cotizacion(numero=next_quote_number(),ot_id=ot.id,cliente=ot.cliente,creada_por=usuario_actual().nombre)
         cargar_cotizacion_form(q,request.form); db.session.add(q); db.session.commit()
@@ -1313,8 +1390,11 @@ def cotizacion_estado(qid):
     if nuevo in ['Presupuesto','Presupuesto enviado','Aprobada','Rechazada']:
         q.estado=nuevo; ot=db.session.get(OT,q.ot_id)
         if nuevo=='Aprobada':
+            if not ((ot.diagnostico or '').strip() or ot.hallazgos):
+                flash('No se puede aprobar una reparación sin diagnóstico registrado.')
+                return redirect(url_for('ver_cotizacion',qid=q.id))
             ot.aprobacion='Aprobada'; ot.estado='Aprobada / Reparación'; q.fecha_aprobacion=datetime.utcnow(); q.fecha_comprometida=sumar_plazo(date.today(),q.plazo_ejecucion_cantidad,q.plazo_ejecucion_unidad); ot.fecha_comprometida=q.fecha_comprometida
-        elif nuevo=='Rechazada': ot.aprobacion='Rechazada'
+        elif nuevo=='Rechazada': ot.aprobacion='Rechazada'; ot.estado='Cotización rechazada'
         elif nuevo=='Presupuesto enviado': ot.estado='Cotización enviada'
         db.session.commit(); audit('Estado cotización',f'{q.numero}: {nuevo}')
     return redirect(url_for('ver_cotizacion',qid=q.id))

@@ -1,6 +1,15 @@
 {% extends 'base.html' %}{% block c %}
 <div class="pagehead"><div><h1>{{ot.numero}}</h1><p>{{ot.cliente}} · {{ot.equipo}} · {{ot.componente}}</p></div><span class="tag big">{{ot.estado}}</span></div>
-<div class="steps"><span>1 Ingreso</span><span>2 Diagnóstico</span><span>3 Cotización</span><span>4 Reparación</span><span>5 Calidad</span><span>6 Checklist</span><span>7 Despacho</span></div>
+<section class="card" style="margin:12px 0 18px" id="seguimiento-ot">
+ <div class="ot-track-head"><div><h2 style="margin:0">Seguimiento de procesos</h2><p class="muted" style="margin:4px 0">Seleccione una etapa habilitada para abrir el módulo de esta OT.</p></div><strong class="ot-condition">{{condicion}}</strong></div>
+ <div class="ot-track-grid">{% for p in pasos %}
+ {% if p.estado!='bloqueada' and p.permitido %}<a class="ot-track-block {{p.estado}}" href="{{p.href}}">{% else %}<div class="ot-track-block bloqueada" aria-disabled="true">{% endif %}
+ <div class="ot-track-top"><small>{{'%02d'|format(loop.index)}}</small><span>{% if p.estado=='completa' %}✓{% elif p.estado=='pendiente' %}✕{% else %}🔒{% endif %}</span></div>
+ <strong>{{p.nombre}}</strong><small>{{p.descripcion}}</small>
+ {% if p.estado!='bloqueada' and p.permitido %}</a>{% else %}</div>{% endif %}
+ {% endfor %}</div>
+ <p class="muted" style="font-size:12px;margin:10px 0 0">Verde: completada · Rojo: pendiente y habilitada · Gris: inhabilitada hasta cumplir requisitos. La cotización rechazada detiene la reparación.</p>
+</section>
 {% if usuario_actual.puede('cotizaciones') %}
 <div class="card quote-action">
   <div><h2>Cotización vinculada a esta OT</h2><p>{% if ot.cotizacion %}Cotización actual: <b>{{ot.cotizacion}}</b>{% else %}Cuando el diagnóstico esté listo, genera el presupuesto directamente desde esta OT.{% endif %}</p></div>
@@ -15,16 +24,18 @@
 <div class="card" style="margin:16px 0"><h2>Vinculación al Maestro de Reparaciones</h2><p class="muted">Si una reparación no aparece en Planificación, compruebe que el componente recibido esté vinculado al componente correcto del maestro. No se asignan vínculos automáticamente para evitar confundir piezas.</p>
 {% for c in ot.componentes_detalle %}{% if c.condicion_ingreso=='Recibido' %}<form method="post" action="{{url_for('vincular_componente_ot',ot_id=ot.id)}}" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:10px 0"><b style="min-width:180px">{{c.nombre}}</b><input type="hidden" name="componente_id" value="{{c.id}}"><select name="modelo_componente_id" style="flex:1;min-width:220px"><option value="">Sin vincular</option>{% for m in componentes_maestros %}<option value="{{m.id}}" {% if c.componente_modelo_id==m.id %}selected{% endif %}>{{m.modelo_equipo.marca}} {{m.modelo_equipo.modelo}} — {{m.nombre}}</option>{% endfor %}</select><button class="btn secondary" type="submit">Guardar vínculo</button></form>{% endif %}{% endfor %}
 {% if usuario_actual.puede('diagnostico') %}<a class="btn secondary" href="{{url_for('ot_reparaciones',ot_id=ot.id)}}">Seleccionar reparaciones necesarias</a>{% endif %}</div>{% endif %}
-<form method="post" class="panel wide">
+<form method="post" class="panel wide" id="ot-datos">
 {% if ot.componentes_detalle %}<div class="wide"><h2>Despiece / control de componentes</h2><p class="muted">Ingreso = qué llegó físicamente. Resolución = qué hará INGEPRO con cada elemento.</p><div class="tablewrap"><table><tr><th>Componente</th><th>Ingreso</th><th>Resolución</th><th>Material</th><th>Ubicación</th></tr>{% for c in ot.componentes_detalle %}<tr><td><b>{{c.codigo or ''}}</b>{% if c.codigo %}<br>{% endif %}{{c.nombre}}<small>{{c.categoria}}</small></td><td><select name="condicion_{{c.id}}">{% for x in ['Recibido','No recibido','No aplica'] %}<option {% if c.condicion_ingreso==x %}selected{% endif %}>{{x}}</option>{% endfor %}</select></td><td><select name="resolucion_{{c.id}}">{% for x in ['Sin intervención','Reutilizar','Reparar','Recuperar','Fabricar nuevo','Suministrar nuevo','Reemplazar'] %}<option {% if c.resolucion==x %}selected{% endif %}>{{x}}</option>{% endfor %}</select></td><td><input name="material_{{c.id}}" value="{{c.material or ''}}" placeholder="Material"></td><td><input name="ubicacion_{{c.id}}" value="{{c.ubicacion or ''}}" placeholder="Rack / zona"></td></tr>{% endfor %}</table></div></div>{% endif %}
 <label>Diagnóstico<textarea name="diagnostico" lang="es" spellcheck="true" placeholder="Condición de recepción, inspección, mediciones, daños y recomendación...">{{ot.diagnostico or ''}}</textarea></label>
 <label>N° Cotización<input name="cotizacion" value="{{ot.cotizacion or ''}}" readonly placeholder="Se asigna al crear la cotización"></label>
-<label>Aprobación cliente<select name="aprobacion"><option>{{ot.aprobacion}}</option><option>Pendiente</option><option>Aprobada</option><option>Rechazada</option></select></label>
+<label>Aprobación cliente<input value="{{ot.aprobacion or 'Pendiente'}}" readonly title="La aprobación se registra desde la cotización"></label>
 <label>Reparación / trabajos ejecutados<textarea name="reparacion" lang="es" spellcheck="true">{{ot.reparacion or ''}}</textarea></label>
-<label>Control de calidad<textarea name="control_calidad" lang="es" spellcheck="true">{{ot.control_calidad or ''}}</textarea></label>
+<div id="ot-control"></div><label>Control de calidad<textarea name="control_calidad" lang="es" spellcheck="true">{{ot.control_calidad or ''}}</textarea></label>
 <label>Checklist físico (referencia)<input name="checklist" value="{{ot.checklist or ''}}" placeholder="Ej. CHK-BOM-01 firmado"></label>
 <label>Embalaje<textarea name="embalaje" lang="es" spellcheck="true">{{ot.embalaje or ''}}</textarea></label>
-<label>Despacho<textarea name="despacho" lang="es" spellcheck="true">{{ot.despacho or ''}}</textarea></label>
-<label>Estado<select name="estado">{% for e in ['Diagnóstico','Cotización enviada','Aprobada / Reparación','Control de calidad','Checklist / Embalaje','Despachada','Cerrada'] %}<option {% if ot.estado==e %}selected{% endif %}>{{e}}</option>{% endfor %}</select></label>
+<div id="ot-despacho"></div><label>Despacho<textarea name="despacho" lang="es" spellcheck="true">{{ot.despacho or ''}}</textarea></label>
+<div id="ot-entrega"></div><h2>Seguimiento administrativo y entrega en faena</h2>
+<div class="ot-admin-grid"><label>Fecha envío cotización<input type="date" name="fecha_envio_cotizacion" value="{{ot.fecha_envio_cotizacion.isoformat() if ot.fecha_envio_cotizacion else ''}}"></label><label>Enviado por<input name="enviado_por" value="{{ot.enviado_por or ''}}"></label><label>Enviado a<input name="enviado_a" value="{{ot.enviado_a or ''}}"></label><label>Fecha entrega en faena<input type="date" name="fecha_entrega_faena" value="{{ot.fecha_entrega_faena.isoformat() if ot.fecha_entrega_faena else ''}}"></label><label>Recibido por<input name="recibido_por" value="{{ot.recibido_por or ''}}"></label><label>Revisado en faena por INGEPRO<input name="revisado_faena_por" value="{{ot.revisado_faena_por or ''}}"></label></div>
+<label>Condición actual<input value="{{condicion}}" readonly title="Se calcula automáticamente desde los módulos de la OT"></label>
 <button>Guardar cambios</button></form>
 {% endblock %}

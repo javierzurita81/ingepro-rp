@@ -1,5 +1,5 @@
 from pathlib import Path
-import os, json, subprocess, tempfile, secrets, shutil, sqlite3, re, unicodedata
+import os, json, subprocess, tempfile, secrets, shutil, sqlite3, re, unicodedata, hashlib
 from datetime import datetime, date, timedelta
 from functools import wraps
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session, abort, send_file
@@ -1586,6 +1586,100 @@ def respaldo_completo():
     if resultado.returncode or not resultado.stdout.startswith(b'PGDMP'):
         raise RuntimeError('Falló la creación o validación del respaldo PostgreSQL.')
     return resultado.stdout,'dump','application/octet-stream'
+
+# V7.34: migración explícita de códigos históricos, sin alterar PK ni reparaciones.
+PREFIJOS_COMPONENTES = {
+    'CUERPO':'CU', 'EJE':'EJ', 'IMPULSOR':'IM', 'TAPA':'TA',
+    'SOPORTE':'SO', 'FRAME':'FR', 'VOLUTA':'VO', 'TUERCA':'TU',
+    'CAMISA':'CA', 'BASE':'BA', 'ACOPLAMIENTO':'AC', 'RODAMIENTO':'RO',
+    'SELLO':'SE', 'MOTOR':'MO', 'DESCARGA':'DE', 'VALVULA':'VA'
+}
+
+def prefijo_componente_v734(nombre):
+    normal=unicodedata.normalize('NFKD',nombre or '').encode('ascii','ignore').decode().upper()
+    palabras=re.findall(r'[A-Z]+',normal)
+    for palabra in palabras:
+        if palabra in PREFIJOS_COMPONENTES: return PREFIJOS_COMPONENTES[palabra]
+    return prefijo_codigo(palabras[0] if palabras else 'XX',2)
+
+def propuesta_codigos_v734():
+    """Determinista: orden por ID; contador separado por componente+marca."""
+    filas=[]; contadores={}
+    for c,m in db.session.query(ComponenteModelo,ModeloEquipo).join(ModeloEquipo,ComponenteModelo.modelo_id==ModeloEquipo.id).order_by(ComponenteModelo.id).all():
+        base=f'{prefijo_componente_v734(c.nombre)}-{prefijo_codigo(m.marca,3)}'
+        contadores[base]=contadores.get(base,0)+1
+        codigo=f'{base}-{contadores[base]:04d}'
+        filas.append({'id':c.id,'modelo_id':m.id,'modelo':m.modelo,'marca':m.marca,'nombre':c.nombre,'anterior':c.codigo or '', 'nuevo':codigo, 'reparaciones':db.session.query(ReparacionMaestra).filter_by(componente_modelo_id=c.id).count()})
+    return filas
+
+def huella_codigos_v734(filas):
+    # Incluye códigos actuales y datos que determinan los nuevos códigos.
+    contenido=[[f[k] for k in ('id','modelo_id','marca','modelo','nombre','anterior','nuevo')] for f in filas]
+    return hashlib.sha256(json.dumps(contenido,ensure_ascii=False).encode('utf-8')).hexdigest()
+
+@app.route('/administracion/codigos-componentes')
+@login_required
+def administrar_codigos_componentes():
+    if not usuario_actual().es_admin: abort(403)
+    filas=propuesta_codigos_v734()
+    codigos=[x['nuevo'] for x in filas]
+    duplicados=len(codigos)!=len(set(codigos))
+    huella=huella_codigos_v734(filas)
+    listo=session.get('codigos_v734_huella')==huella and bool(session.get('codigos_v734_token'))
+    return render_template('administrar_codigos_componentes.html',filas=filas,duplicados=duplicados,listo=listo,habilitado=os.environ.get('HABILITAR_MIGRACION_CODIGOS')=='SI')
+
+@app.route('/administracion/codigos-componentes/respaldo',methods=['POST'])
+@login_required
+def respaldo_codigos_componentes():
+    if not usuario_actual().es_admin: abort(403)
+    filas=propuesta_codigos_v734()
+    if len({f['nuevo'] for f in filas})!=len(filas): abort(409)
+    try: datos,ext,mime=respaldo_completo()
+    except Exception as exc:
+        flash(f'No fue posible generar respaldo: {exc}')
+        return redirect(url_for('administrar_codigos_componentes'))
+    session['codigos_v734_huella']=huella_codigos_v734(filas)
+    session['codigos_v734_token']=secrets.token_urlsafe(24)
+    audit('Respaldo previo a migración de códigos',f'{len(datos)} bytes; {len(filas)} componentes')
+    return send_file(BytesIO(datos),mimetype=mime,as_attachment=True,download_name=f'INGEPRO_pre_codigos_{datetime.utcnow():%Y%m%d_%H%M%S}.{ext}')
+
+@app.route('/administracion/codigos-componentes/aplicar',methods=['POST'])
+@login_required
+def aplicar_codigos_componentes():
+    if not usuario_actual().es_admin: abort(403)
+    if os.environ.get('HABILITAR_MIGRACION_CODIGOS')!='SI':
+        flash('Migración bloqueada: habilite HABILITAR_MIGRACION_CODIGOS=SI únicamente después de verificar el respaldo.')
+        return redirect(url_for('administrar_codigos_componentes'))
+    if request.form.get('confirmacion')!='ACTUALIZAR CODIGOS':
+        flash('Confirmación incorrecta.'); return redirect(url_for('administrar_codigos_componentes'))
+    if not session.get('codigos_v734_token'):
+        flash('Primero descargue un respaldo.'); return redirect(url_for('administrar_codigos_componentes'))
+    try:
+        # Serializa la migración frente a otra migración simultánea en PostgreSQL.
+        if db.engine.dialect.name=='postgresql':
+            db.session.execute(db.text('SELECT pg_advisory_xact_lock(7342026)'))
+        filas=propuesta_codigos_v734()
+        if huella_codigos_v734(filas)!=session.get('codigos_v734_huella'):
+            db.session.rollback(); session.pop('codigos_v734_token',None)
+            flash('Los componentes cambiaron desde el respaldo. Descargue uno nuevo.')
+            return redirect(url_for('administrar_codigos_componentes'))
+        if len(set(x['nuevo'] for x in filas))!=len(filas):
+            db.session.rollback(); abort(409,'Hay códigos duplicados en la propuesta.')
+        for fila in filas:
+            c=db.session.get(ComponenteModelo,fila['id'])
+            c.codigo=fila['nuevo']
+            # OTComponente conserva PK y FK; se actualiza el código visible de las OT vinculadas.
+            db.session.query(OTComponente).filter_by(componente_modelo_id=c.id).update({'codigo':fila['nuevo']},synchronize_session=False)
+        db.session.add(Auditoria(usuario=usuario_actual().nombre,accion='Migración códigos componentes V7.34',detalle=f'{len(filas)} componentes; huella {huella_codigos_v734(filas)}'))
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        raise
+    finally:
+        session.pop('codigos_v734_token',None)
+        session.pop('codigos_v734_huella',None)
+    flash(f'Códigos actualizados: {len(filas)} componentes. Reparaciones y relaciones de OT conservadas.')
+    return redirect(url_for('administrar_codigos_componentes'))
 
 @app.route('/administracion/limpieza-ot')
 @login_required

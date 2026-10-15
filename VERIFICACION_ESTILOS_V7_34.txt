@@ -1,0 +1,3 @@
+V7.34: static/style.css y todas las plantillas HTML existentes salvo templates/base.html son identicas a V7.33.
+En base.html solo se incorpora el enlace Códigos para administrador.
+No se ha verificado renderizado visual en Render ni ejecutado migracion PostgreSQL.

@@ -1,4 +1,5 @@
-import os, json
+from pathlib import Path
+import os, json, subprocess, tempfile, secrets, shutil, sqlite3, re, unicodedata
 from datetime import datetime, date, timedelta
 from functools import wraps
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session, abort, send_file
@@ -747,22 +748,92 @@ def cliente_ver(cid):
         return redirect(url_for('cliente_ver',cid=c.id))
     return render_template('cliente_ver.html',cliente=c,formatear_rut=formatear_rut)
 
+def prefijo_codigo(valor, largo):
+    limpio=unicodedata.normalize('NFKD', (valor or '').upper()).encode('ascii','ignore').decode()
+    letras=re.sub(r'[^A-Z]', '', limpio)
+    return (letras + 'X'*largo)[:largo]
+
+def codigo_equipo(m):
+    return f'{prefijo_codigo(m.tipo,2)}-{prefijo_codigo(m.marca,3)}-{m.id:04d}'
+
+def codigo_componente(c, m):
+    return f'{prefijo_codigo(c.nombre,2)}-{prefijo_codigo(m.marca,3)}-{c.id:04d}'
+
 @app.route('/maestros/equipos',methods=['GET','POST'])
 @permiso_required('maestros')
 def maestros_equipos():
     if request.method=='POST':
-        m=ModeloEquipo(tipo=request.form['tipo'].strip(),marca=request.form['marca'].strip(),modelo=request.form['modelo'].strip())
-        db.session.add(m); db.session.commit(); audit('Modelo de equipo creado',f'{m.marca} {m.modelo}'); return redirect(url_for('maestro_modelo',mid=m.id))
-    return render_template('maestros_equipos.html',modelos=ModeloEquipo.query.order_by(ModeloEquipo.marca,ModeloEquipo.modelo).all())
+        tipo=request.form.get('tipo','').strip(); marca=request.form.get('marca','').strip(); modelo=request.form.get('modelo','').strip()
+        if not all((tipo,marca,modelo)):
+            flash('Complete tipo, marca y modelo.'); return redirect(url_for('maestros_equipos'))
+        existe=next((x for x in ModeloEquipo.query.all() if (x.tipo.casefold(),x.marca.casefold(),x.modelo.casefold())==(tipo.casefold(),marca.casefold(),modelo.casefold())),None)
+        if existe:
+            flash('Ya existe ese tipo, marca y modelo.'); return redirect(url_for('maestro_modelo',mid=existe.id))
+        m=ModeloEquipo(tipo=tipo,marca=marca,modelo=modelo)
+        db.session.add(m); db.session.commit(); audit('Modelo de equipo creado',f'{codigo_equipo(m)}: {m.marca} {m.modelo}')
+        return redirect(url_for('maestro_modelo',mid=m.id))
+    return render_template('maestros_equipos.html',modelos=ModeloEquipo.query.filter_by(activo=True).order_by(ModeloEquipo.marca,ModeloEquipo.modelo).all(),codigo_equipo=codigo_equipo)
 
 @app.route('/maestros/equipos/<int:mid>',methods=['GET','POST'])
 @permiso_required('maestros')
 def maestro_modelo(mid):
     m=db.session.get(ModeloEquipo,mid) or abort(404)
     if request.method=='POST':
-        c=ComponenteModelo(modelo_id=m.id,nombre=request.form['nombre'].strip(),codigo=request.form.get('codigo','').strip(),categoria=request.form.get('categoria','Componente reparable'),material_default=request.form.get('material_default','').strip())
-        db.session.add(c); db.session.commit(); audit('Componente de modelo creado',f'{m.marca} {m.modelo}: {c.nombre}'); flash('Componente agregado al despiece.'); return redirect(url_for('maestro_modelo',mid=m.id))
-    return render_template('maestro_modelo.html',modelo=m)
+        nombre=request.form.get('nombre','').strip()
+        if not nombre: abort(400)
+        c=ComponenteModelo(modelo_id=m.id,nombre=nombre,categoria=request.form.get('categoria','Componente reparable'),material_default=request.form.get('material_default','').strip())
+        db.session.add(c); db.session.flush(); c.codigo=codigo_componente(c,m)
+        db.session.commit(); audit('Componente de modelo creado',f'{m.marca} {m.modelo}: {c.codigo} {c.nombre}')
+        flash('Componente agregado al despiece.'); return redirect(url_for('maestro_modelo',mid=m.id))
+    return render_template('maestro_modelo.html',modelo=m,codigo_equipo=codigo_equipo)
+
+@app.route('/maestros/equipos/<int:mid>/editar',methods=['POST'])
+@permiso_required('maestros')
+def editar_modelo(mid):
+    m=db.session.get(ModeloEquipo,mid) or abort(404)
+    nuevo=request.form.get('modelo','').strip()
+    if not nuevo: abort(400)
+    if any(x.id!=m.id and (x.tipo.casefold(),x.marca.casefold(),x.modelo.casefold())==(m.tipo.casefold(),m.marca.casefold(),nuevo.casefold()) for x in ModeloEquipo.query.all()):
+        flash('El modelo ya existe.'); return redirect(url_for('maestro_modelo',mid=mid))
+    anterior=m.modelo; m.modelo=nuevo; db.session.commit(); audit('Modelo editado',f'{anterior} → {nuevo}')
+    return redirect(url_for('maestro_modelo',mid=mid))
+
+@app.route('/maestros/componentes/<int:cid>/editar',methods=['POST'])
+@permiso_required('maestros')
+def editar_componente(cid):
+    c=db.session.get(ComponenteModelo,cid) or abort(404)
+    nombre=request.form.get('nombre','').strip()
+    if not nombre: abort(400)
+    c.nombre=nombre; c.material_default=request.form.get('material_default','').strip()
+    c.categoria=request.form.get('categoria',c.categoria)
+    db.session.commit(); audit('Componente editado',f'{c.id}: {nombre}')
+    return redirect(url_for('maestro_modelo',mid=c.modelo_id))
+
+@app.route('/maestros/equipos/<int:mid>/eliminar',methods=['POST'])
+@permiso_required('maestros')
+def eliminar_modelo(mid):
+    if not usuario_actual().es_admin: abort(403)
+    m=db.session.get(ModeloEquipo,mid) or abort(404)
+    if request.form.get('confirmacion')!='ELIMINAR':
+        flash('Escriba ELIMINAR para confirmar.'); return redirect(url_for('maestro_modelo',mid=mid))
+    if OT.query.filter_by(modelo_id=mid).first() or OTComponente.query.filter(OTComponente.componente_modelo_id.in_([c.id for c in m.componentes])).first():
+        m.activo=False; db.session.commit(); audit('Modelo desactivado por referencias históricas',codigo_equipo(m)); flash('Modelo desactivado: existen referencias de OT.')
+    else:
+        codigo=codigo_equipo(m); db.session.delete(m); db.session.commit(); audit('Modelo eliminado',codigo); flash('Modelo eliminado.')
+    return redirect(url_for('maestros_equipos'))
+
+@app.route('/maestros/componentes/<int:cid>/eliminar',methods=['POST'])
+@permiso_required('maestros')
+def eliminar_componente(cid):
+    if not usuario_actual().es_admin: abort(403)
+    c=db.session.get(ComponenteModelo,cid) or abort(404)
+    if request.form.get('confirmacion')!='ELIMINAR': abort(400)
+    mid=c.modelo_id
+    if OTComponente.query.filter_by(componente_modelo_id=cid).first() or OTReparacionSeleccionada.query.filter(OTReparacionSeleccionada.reparacion_maestra_id.in_([r.id for r in c.reparaciones])).first():
+        c.activo=False; db.session.commit(); audit('Componente desactivado',str(cid)); flash('Componente desactivado: tiene referencias históricas.')
+    else:
+        db.session.delete(c); db.session.commit(); audit('Componente eliminado',str(cid)); flash('Componente eliminado.')
+    return redirect(url_for('maestro_modelo',mid=mid))
 
 @app.route('/maestros/componentes/<int:cid>/reparaciones',methods=['GET','POST'])
 @permiso_required('maestros')
@@ -1486,6 +1557,77 @@ def cotizacion_pdf(qid):
     doc.build(story); buf.seek(0)
     audit('PDF cotización generado',q.numero)
     return send_file(buf,mimetype='application/pdf',as_attachment=True,download_name=f'{q.numero}.pdf')
+
+# Limpieza administrativa de datos transaccionales. Nunca modifica tablas maestras.
+TABLAS_LIMPIEZA=(LineaCotizacion,Cotizacion,PlanNoAplica,PlanActividad,OTReparacionSeleccionada,DiagnosticoHallazgo,OTComponente,OT)
+
+def conteos_limpieza():
+    return [(cls.__tablename__, db.session.query(cls).count()) for cls in TABLAS_LIMPIEZA]
+
+def respaldo_completo():
+    url=app.config['SQLALCHEMY_DATABASE_URI']
+    if url.startswith('sqlite:'):
+        import sqlalchemy
+        ruta=db.engine.url.database
+        with tempfile.NamedTemporaryFile(suffix='.sqlite3',delete=False) as f: destino=f.name
+        try:
+            src=sqlite3.connect(ruta); dst=sqlite3.connect(destino)
+            try: src.backup(dst)
+            finally: src.close(); dst.close()
+            datos=Path(destino).read_bytes()
+            if not datos.startswith(b'SQLite format 3'): raise RuntimeError('Respaldo SQLite inválido')
+            return datos,'sqlite3','application/octet-stream'
+        finally: os.unlink(destino)
+    ejecutable=shutil.which('pg_dump')
+    if not ejecutable: raise RuntimeError('pg_dump no está instalado en el servidor. No se permitirá limpiar sin respaldo.')
+    # pg_dump acepta URLs postgresql+psycopg tras normalización del dialecto.
+    url=url.replace('postgresql+psycopg://','postgresql://',1).replace('postgresql+psycopg2://','postgresql://',1)
+    resultado=subprocess.run([ejecutable,'--format=custom','--no-owner','--no-acl','--dbname',url],capture_output=True,timeout=180)
+    if resultado.returncode or not resultado.stdout.startswith(b'PGDMP'):
+        raise RuntimeError('Falló la creación o validación del respaldo PostgreSQL.')
+    return resultado.stdout,'dump','application/octet-stream'
+
+@app.route('/administracion/limpieza-ot')
+@login_required
+def limpieza_ot():
+    if not usuario_actual().es_admin: abort(403)
+    return render_template('limpieza_ot.html',conteos=conteos_limpieza(),respaldo_listo=bool(session.get('respaldo_ot_token')))
+
+@app.route('/administracion/limpieza-ot/respaldo',methods=['POST'])
+@login_required
+def descargar_respaldo_ot():
+    if not usuario_actual().es_admin: abort(403)
+    try: datos,ext,mime=respaldo_completo()
+    except Exception as e:
+        flash(f'No se pudo generar el respaldo: {e}'); return redirect(url_for('limpieza_ot'))
+    session['respaldo_ot_token']=secrets.token_urlsafe(24)
+    session['respaldo_ot_conteos']=[list(x) for x in conteos_limpieza()]
+    audit('Respaldo previo a limpieza generado',f'{len(datos)} bytes')
+    return send_file(BytesIO(datos),mimetype=mime,as_attachment=True,download_name=f'INGEPRO_respaldo_{datetime.utcnow():%Y%m%d_%H%M%S}.{ext}')
+
+@app.route('/administracion/limpieza-ot/ejecutar',methods=['POST'])
+@login_required
+def ejecutar_limpieza_ot():
+    if not usuario_actual().es_admin: abort(403)
+    if os.environ.get('HABILITAR_LIMPIEZA_OT')!='SI':
+        flash('La limpieza está bloqueada hasta validar el respaldo y habilitarla expresamente en Render.')
+        return redirect(url_for('limpieza_ot'))
+    if request.form.get('confirmacion')!='ELIMINAR OT' or not session.get('respaldo_ot_token'):
+        flash('Primero genere el respaldo y escriba ELIMINAR OT.'); return redirect(url_for('limpieza_ot'))
+    if session.get('respaldo_ot_conteos')!=[list(x) for x in conteos_limpieza()]:
+        session.pop('respaldo_ot_token',None)
+        flash('Los datos cambiaron desde el respaldo. Genere uno nuevo.'); return redirect(url_for('limpieza_ot'))
+    # Protección contra limpieza de una base distinta de la respaldada.
+    try:
+        for cls in TABLAS_LIMPIEZA: db.session.query(cls).delete(synchronize_session=False)
+        db.session.add(Auditoria(usuario=usuario_actual().nombre,accion='Limpieza total de OT de prueba',detalle='Datos transaccionales eliminados, maestros conservados.'))
+        db.session.commit()
+    except Exception:
+        db.session.rollback(); raise
+    session.pop('respaldo_ot_token',None); session.pop('respaldo_ot_conteos',None)
+    flash('Limpieza completada. Usuarios, clientes, equipos y componentes conservados.')
+    return redirect(url_for('limpieza_ot'))
+
 
 with app.app_context(): db.create_all(); asegurar_columnas(); seed_maestros()
 if __name__=='__main__': app.run(host='0.0.0.0',port=int(os.environ.get('PORT',5000)),debug=True)

@@ -76,3 +76,7 @@ header{min-height:72px;background:#fff;border-bottom:3px solid #0b6596;box-shado
 .mm-page .mm-editor-row td{padding:12px!important}
 .mm-page .mm-fold{padding:12px!important;margin-top:12px!important}
 @media(max-width:760px){.mm-page .mm-card{padding:12px!important}.mm-page .mm-table{min-width:620px}}
+
+/* OT: guardar cambios al final, sin alterar cuadros de seguimiento */
+.ot-save-actions{display:flex;justify-content:flex-end;align-items:center;grid-column:1/-1;width:100%;padding-top:14px;margin-top:8px;border-top:1px solid var(--border,#dce3eb)}
+.ot-save-actions button{min-width:170px}

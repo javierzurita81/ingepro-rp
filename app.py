@@ -217,6 +217,8 @@ class OT(db.Model):
     fecha_envio_cotizacion=db.Column(db.Date)
     enviado_por=db.Column(db.String(160))
     enviado_a=db.Column(db.String(160))
+    recibido_bodega_por=db.Column(db.String(160))
+    observaciones_admin=db.Column(db.Text)
     modelo_equipo=db.relationship('ModeloEquipo')
     componentes_detalle=db.relationship('OTComponente', backref='ot', cascade='all, delete-orphan', lazy=True)
     hallazgos=db.relationship('DiagnosticoHallazgo', backref='ot', cascade='all, delete-orphan', lazy=True, order_by='DiagnosticoHallazgo.id')
@@ -320,7 +322,7 @@ def asegurar_columnas():
         cols={c['name'] for c in insp.get_columns('ot')}
         if 'fecha_comprometida' not in cols: db.session.execute(text('ALTER TABLE ot ADD COLUMN fecha_comprometida DATE'))
         if 'modelo_id' not in cols: db.session.execute(text('ALTER TABLE ot ADD COLUMN modelo_id INTEGER'))
-        for n,t in {'fecha_entrega_faena':'DATE','recibido_por':'VARCHAR(160)','revisado_faena_por':'VARCHAR(160)','fecha_envio_cotizacion':'DATE','enviado_por':'VARCHAR(160)','enviado_a':'VARCHAR(160)'}.items():
+        for n,t in {'fecha_entrega_faena':'DATE','recibido_por':'VARCHAR(160)','revisado_faena_por':'VARCHAR(160)','fecha_envio_cotizacion':'DATE','enviado_por':'VARCHAR(160)','enviado_a':'VARCHAR(160)','recibido_bodega_por':'VARCHAR(160)','observaciones_admin':'TEXT'}.items():
             if n not in cols: db.session.execute(text(f'ALTER TABLE ot ADD COLUMN {n} {t}'))
     if 'cliente' in insp.get_table_names():
         cols={c['name'] for c in insp.get_columns('cliente')}
@@ -490,7 +492,7 @@ def nueva_ot():
     if request.method=='POST':
         cliente=db.session.get(Cliente,int(request.form['cliente_id'])) or abort(404); modelo=db.session.get(ModeloEquipo,int(request.form['modelo_id'])) or abort(404)
         recibidos=set(request.form.getlist('componentes_recibidos'))
-        ot=OT(numero=next_number(),modelo_id=modelo.id,cliente=cliente.nombre,equipo=f'{modelo.tipo} {modelo.marca} {modelo.modelo}',componente='Pendiente detalle',serie=request.form.get('serie'),guia=request.form.get('guia'))
+        ot=OT(numero=next_number(),modelo_id=modelo.id,cliente=cliente.nombre,equipo=f'{modelo.tipo} {modelo.marca} {modelo.modelo}',componente='Pendiente detalle',serie=request.form.get('serie'),guia=request.form.get('guia'),recibido_bodega_por=(usuario_actual().nombre if usuario_actual() else None))
         db.session.add(ot); db.session.flush()
         nombres=[]
         for c in modelo.componentes:
@@ -598,17 +600,16 @@ def ver_ot(ot_id):
             c.resolucion=request.form.get(f'resolucion_{c.id}',c.resolucion)
             c.material=request.form.get(f'material_{c.id}',c.material or '').strip()
             c.ubicacion=request.form.get(f'ubicacion_{c.id}',c.ubicacion or '').strip()
+        # V7.37: campos editables de recepción y entrega; datos de creación inmutables.
         if 'fecha_entrega_faena' in request.form:
             raw=request.form.get('fecha_entrega_faena','').strip()
             try: ot.fecha_entrega_faena=date.fromisoformat(raw) if raw else None
-            except ValueError: flash('Fecha de entrega inválida.'); return redirect(url_for('ver_ot',ot_id=ot.id))
-            for f in ('recibido_por','revisado_faena_por','enviado_por','enviado_a'):
-                if f in request.form: setattr(ot,f,request.form.get(f,'').strip()[:160])
-            raw_envio=request.form.get('fecha_envio_cotizacion','').strip()
-            try: ot.fecha_envio_cotizacion=date.fromisoformat(raw_envio) if raw_envio else None
-            except ValueError: flash('Fecha de envío inválida.'); return redirect(url_for('ver_ot',ot_id=ot.id))
-            if ot.fecha_entrega_faena and not (ot.recibido_por or '').strip():
-                flash('Para registrar la entrega debes indicar quién recibió el equipo.'); return redirect(url_for('ver_ot',ot_id=ot.id))
+            except ValueError:
+                db.session.rollback(); flash('Fecha de entrega en faena inválida.'); return redirect(url_for('ver_ot',ot_id=ot.id))
+        if 'guia' in request.form: ot.guia=request.form.get('guia','').strip()[:80]
+        if 'enviado_por' in request.form: ot.enviado_por=request.form.get('enviado_por','').strip()[:160]
+        if 'revisado_faena_por' in request.form: ot.revisado_faena_por=request.form.get('revisado_faena_por','').strip()[:160]
+        if 'observaciones_admin' in request.form: ot.observaciones_admin=request.form.get('observaciones_admin','').strip()
         db.session.commit(); audit('OT actualizada',ot.numero); flash('OT actualizada'); return redirect(url_for('ver_ot',ot_id=ot.id))
     if not ot.componentes_detalle:
         modelo=inferir_modelo_ot(ot)

@@ -9,7 +9,8 @@ document.querySelectorAll('.diag-photo-stage[data-hid]').forEach(stage=>{
   const canvas=stage.querySelector('canvas'); if(!canvas)return;
   const img=stage.querySelector('img'); const ctx=canvas.getContext('2d');
   let marks=JSON.parse(stage.dataset.marcas||'[]');let tool='circle',color='#e53935';
-  const panel=stage.closest('.diag-photo-side');
+  const panel=stage.closest('.diag-photo-extra')||stage.closest('.diag-photo-side');
+  const toolbar=stage.closest('.diag-photo-extra')||stage.closest('.diag-photo-side');
   function draw(){
     const rect=stage.getBoundingClientRect();const ratio=window.devicePixelRatio||1;
     canvas.width=Math.max(1,Math.round(rect.width*ratio));canvas.height=Math.max(1,Math.round(rect.height*ratio));
@@ -20,10 +21,10 @@ document.querySelectorAll('.diag-photo-stage[data-hid]').forEach(stage=>{
       else{ctx.moveTo(x-28,y+23);ctx.lineTo(x+25,y-23);ctx.moveTo(x+25,y-23);ctx.lineTo(x+7,y-18);ctx.moveTo(x+25,y-23);ctx.lineTo(x+20,y-5)}ctx.stroke();});
   }
   canvas.addEventListener('pointerup',e=>{const r=canvas.getBoundingClientRect();marks.push({tipo:tool,color,x:Math.max(0,Math.min(1,(e.clientX-r.left)/r.width)),y:Math.max(0,Math.min(1,(e.clientY-r.top)/r.height))});draw();});
-  panel.querySelectorAll('[data-tool]').forEach(b=>b.addEventListener('click',()=>{tool=b.dataset.tool;panel.querySelectorAll('[data-tool]').forEach(t=>t.classList.toggle('active',t===b));}));
-  panel.querySelectorAll('[data-color]').forEach(b=>b.addEventListener('click',()=>{color=b.dataset.color;}));
-  panel.querySelector('[data-undo]').addEventListener('click',()=>{marks.pop();draw();});
-  panel.querySelector('[data-save-marks]').addEventListener('click',async e=>{
+  (stage.closest('.diag-photo-extra')||panel).querySelectorAll('[data-tool]').forEach(b=>b.addEventListener('click',()=>{tool=b.dataset.tool;(stage.closest('.diag-photo-extra')||panel).querySelectorAll('[data-tool]').forEach(t=>t.classList.toggle('active',t===b));}));
+  (stage.closest('.diag-photo-extra')||panel).querySelectorAll('[data-color]').forEach(b=>b.addEventListener('click',()=>{color=b.dataset.color;}));
+  (stage.closest('.diag-photo-extra')||panel).querySelector('[data-undo]').addEventListener('click',()=>{marks.pop();draw();});
+  (stage.closest('.diag-photo-extra')||panel).querySelector('[data-save-marks]').addEventListener('click',async e=>{
     const b=e.currentTarget;b.disabled=true;
     try{const r=await fetch(b.dataset.url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({marcas:marks})});if(!r.ok)throw Error('No se pudieron guardar las marcas');b.textContent='✓ Marcas guardadas';setTimeout(()=>b.textContent='Guardar marcas',2200)}catch(err){alert(err.message)}finally{b.disabled=false}
   });

@@ -6,7 +6,7 @@ from flask import Flask, render_template, request, redirect, url_for, flash, jso
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
 from io import BytesIO
-from PIL import Image as PILImage, ImageOps
+from PIL import Image as PILImage, ImageOps, ImageDraw
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -159,6 +159,12 @@ class DiagnosticoHallazgo(db.Model):
     creado=db.Column(db.DateTime, default=datetime.utcnow)
     creado_por=db.Column(db.String(120))
     componente=db.relationship('OTComponente')
+
+class DiagnosticoMarca(db.Model):
+    __tablename__='diagnostico_marca'
+    id=db.Column(db.Integer,primary_key=True)
+    hallazgo_id=db.Column(db.Integer,db.ForeignKey('diagnostico_hallazgo.id'),unique=True,nullable=False)
+    marcas_json=db.Column(db.Text,default='[]')
 
 class Cotizacion(db.Model):
     id=db.Column(db.Integer, primary_key=True)
@@ -648,11 +654,31 @@ def diagnostico_ot(ot_id):
         condicion=request.form.get('condicion','').strip()
         if not condicion:
             flash('Debes indicar la condición encontrada.'); return redirect(url_for('diagnostico_ot',ot_id=ot.id))
-        nombre,mime,datos=preparar_foto(request.files.get('foto'))
+        nombre,mime,datos=preparar_foto(request.files.get('foto_camara') or request.files.get('foto_archivo') or request.files.get('foto'))
         h=DiagnosticoHallazgo(ot_id=ot.id,ot_componente_id=comp.id if comp else None,zona=request.form.get('zona','').strip(),condicion=condicion,trabajo_recomendado=request.form.get('trabajo_recomendado','').strip(),observacion=request.form.get('observacion','').strip(),estado=request.form.get('estado','Pendiente'),foto_nombre=nombre,foto_mime=mime,foto_datos=datos,creado_por=usuario_actual().nombre)
         db.session.add(h); db.session.commit(); audit('Hallazgo diagnóstico creado',f'{ot.numero} / {comp.nombre if comp else "General"}')
         flash('Hallazgo agregado al diagnóstico.'); return redirect(url_for('diagnostico_ot',ot_id=ot.id))
-    return render_template('diagnostico.html',ot=ot)
+    marcas_guardadas={m.hallazgo_id:json.loads(m.marcas_json or '[]') for m in DiagnosticoMarca.query.filter(DiagnosticoMarca.hallazgo_id.in_([h.id for h in ot.hallazgos])).all()} if ot.hallazgos else {}
+    return render_template('diagnostico.html',ot=ot,marcas_guardadas=marcas_guardadas)
+
+@app.route('/diagnostico/hallazgo/<int:hid>/marcas',methods=['POST'])
+@permiso_required('diagnostico')
+def diagnostico_marcas(hid):
+    h=db.session.get(DiagnosticoHallazgo,hid) or abort(404)
+    if not h.foto_datos: return jsonify({'error':'Primero debe cargar una fotografía.'}),400
+    payload=request.get_json(silent=True) or {}
+    marcas=payload.get('marcas',[])
+    if not isinstance(marcas,list) or len(marcas)>100: return jsonify({'error':'Marcas inválidas'}),400
+    permitidos={'circle','arrow','square'}
+    for m in marcas:
+        if not isinstance(m,dict) or m.get('tipo') not in permitidos or m.get('color') not in ('#e53935','#e6a700','#1976d2') or not all(isinstance(m.get(k),(int,float)) and 0<=m[k]<=1 for k in ('x','y')):
+            return jsonify({'error':'Marcas inválidas'}),400
+    registro=DiagnosticoMarca.query.filter_by(hallazgo_id=hid).first()
+    if not registro:
+        registro=DiagnosticoMarca(hallazgo_id=hid);db.session.add(registro)
+    registro.marcas_json=json.dumps(marcas);db.session.commit()
+    audit('Anotaciones diagnóstico guardadas',f'{h.ot.numero} / Hallazgo {hid}')
+    return jsonify({'ok':True})
 
 @app.route('/diagnostico/hallazgo/<int:hid>/foto')
 @login_required
@@ -687,6 +713,7 @@ def diagnostico_editar(hid):
 @permiso_required('diagnostico')
 def diagnostico_eliminar(hid):
     h=db.session.get(DiagnosticoHallazgo,hid) or abort(404); ot_id=h.ot_id; detalle=f'{h.ot.numero} / Hallazgo {h.id}'
+    DiagnosticoMarca.query.filter_by(hallazgo_id=hid).delete()
     db.session.delete(h); db.session.commit(); audit('Hallazgo diagnóstico eliminado',detalle); flash('Hallazgo eliminado.')
     return redirect(url_for('diagnostico_ot',ot_id=ot_id))
 
@@ -713,7 +740,24 @@ def diagnostico_pdf(ot_id):
         story.append(Paragraph(f'<b>({i}) {comp}</b>',styles['Heading3']))
         if h.foto_datos:
             try:
-                im=Image(BytesIO(h.foto_datos)); im._restrictSize(245,260); story.append(im)
+                foto_pdf=h.foto_datos
+                anotacion=DiagnosticoMarca.query.filter_by(hallazgo_id=h.id).first()
+                if anotacion:
+                    marcas=json.loads(anotacion.marcas_json or '[]')
+                    if marcas:
+                        img_pdf=PILImage.open(BytesIO(h.foto_datos)).convert('RGB')
+                        dib=ImageDraw.Draw(img_pdf); ancho,alto=img_pdf.size
+                        for m in marcas:
+                            x,y=int(m['x']*ancho),int(m['y']*alto)
+                            r=max(12,int(ancho*.055)); color=m['color']; grosor=max(3,int(ancho*.006))
+                            if m['tipo']=='circle':dib.ellipse((x-r,y-r,x+r,y+r),outline=color,width=grosor)
+                            elif m['tipo']=='square':dib.rectangle((x-r,y-r,x+r,y+r),outline=color,width=grosor)
+                            elif m['tipo']=='arrow':
+                                dib.line([(x-r,y+r),(x+r,y-r)],fill=color,width=grosor)
+                                dib.line([(x+r,y-r),(x,y-r//2)],fill=color,width=grosor)
+                                dib.line([(x+r,y-r),(x+r//2,y)],fill=color,width=grosor)
+                        out=BytesIO();img_pdf.save(out,format='JPEG',quality=85);foto_pdf=out.getvalue()
+                im=Image(BytesIO(foto_pdf)); im._restrictSize(245,260); story.append(im)
             except: pass
         txt=f'<b>Zona:</b> {h.zona or "-"}<br/><b>Condición encontrada:</b> {h.condicion}<br/><b>Trabajo recomendado:</b> {h.trabajo_recomendado or "-"}'
         if h.observacion: txt+=f'<br/><b>Observación:</b> {h.observacion}'

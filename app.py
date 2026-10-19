@@ -762,69 +762,196 @@ def diagnostico_eliminar(hid):
 @app.route('/ot/<int:ot_id>/diagnostico/pdf')
 @permiso_required('diagnostico')
 def diagnostico_pdf(ot_id):
-    ot=db.session.get(OT,ot_id) or abort(404)
-    buf=BytesIO(); doc=SimpleDocTemplate(buf,pagesize=A4,rightMargin=28,leftMargin=28,topMargin=28,bottomMargin=30)
-    styles=getSampleStyleSheet(); body=styles['BodyText']; body.fontSize=9; body.leading=12
-    small=ParagraphStyle('small',parent=body,fontSize=8,leading=10,textColor=colors.HexColor('#444444'))
+    """V7.40: informe A4 por OT, agrupado por componentes efectivamente recibidos."""
+    from html import escape
+    from collections import defaultdict
+    from reportlab.platypus import KeepTogether, CondPageBreak, HRFlowable
+    from reportlab.lib.enums import TA_CENTER
+
+    ot = db.session.get(OT, ot_id) or abort(404)
+    azul = colors.HexColor('#183e60')
+    texto = colors.HexColor('#2b4153')
+    suave = colors.HexColor('#e9eff5')
+    borde = colors.HexColor('#dce4eb')
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, rightMargin=34, leftMargin=34,
+                            topMargin=49, bottomMargin=44,
+                            title=f'Diagnóstico técnico {ot.numero}', author='INGEPRO División Maestranza')
+    ancho = A4[0] - 68
+    estilos = {
+        'normal': ParagraphStyle('v740_normal', fontName='Helvetica', fontSize=8.3, leading=12, textColor=texto, spaceAfter=0),
+        'peque': ParagraphStyle('v740_peque', fontName='Helvetica', fontSize=7.4, leading=10.5, textColor=texto),
+        'etiqueta': ParagraphStyle('v740_etiqueta', fontName='Helvetica-Bold', fontSize=7.1, leading=10, textColor=azul),
+        'titulo': ParagraphStyle('v740_titulo', fontName='Helvetica-Bold', fontSize=12, leading=15, textColor=azul),
+        'hallazgo': ParagraphStyle('v740_hallazgo', fontName='Helvetica-Bold', fontSize=9.4, leading=13, textColor=azul),
+        'blanco': ParagraphStyle('v740_blanco', fontName='Helvetica-Bold', fontSize=10, leading=13, textColor=colors.white),
+        'pie_foto': ParagraphStyle('v740_piefoto', fontName='Helvetica', fontSize=7, leading=9, textColor=colors.HexColor('#65788b'), alignment=TA_CENTER),
+    }
+    def P(valor, estilo='normal'):
+        return Paragraph(escape(str(valor if valor is not None else '-')).replace('\n','<br/>'), estilos[estilo])
+    def seccion(nombre):
+        return [Spacer(1, 12), P(nombre,'titulo'), Spacer(1, 7)]
+    def tabla_estilo(t, fondo=None, pad=8):
+        reglas=[('VALIGN',(0,0),(-1,-1),'TOP'),('LEFTPADDING',(0,0),(-1,-1),pad),
+                ('RIGHTPADDING',(0,0),(-1,-1),pad),('TOPPADDING',(0,0),(-1,-1),pad),
+                ('BOTTOMPADDING',(0,0),(-1,-1),pad)]
+        if fondo: reglas.append(('BACKGROUND',(0,0),(-1,-1),fondo))
+        t.setStyle(TableStyle(reglas))
+        return t
+    def foto_marcada(datos, marcas):
+        try:
+            im=PILImage.open(BytesIO(datos))
+            im=ImageOps.exif_transpose(im).convert('RGB')
+            if marcas:
+                dibujo=ImageDraw.Draw(im)
+                w,h=im.size
+                for marca in marcas:
+                    try:
+                        x=int(float(marca.get('x',0))*w); y=int(float(marca.get('y',0))*h)
+                        r=max(12,int(w*.055)); grosor=max(3,int(w*.006))
+                        color=marca.get('color','#e03131')
+                        if not re.fullmatch(r'#[0-9a-fA-F]{6}',str(color)): color='#e03131'
+                        tipo=marca.get('tipo')
+                        if tipo=='circle': dibujo.ellipse((x-r,y-r,x+r,y+r),outline=color,width=grosor)
+                        elif tipo=='square': dibujo.rectangle((x-r,y-r,x+r,y+r),outline=color,width=grosor)
+                        elif tipo=='arrow':
+                            dibujo.line([(x-r,y+r),(x+r,y-r)],fill=color,width=grosor)
+                            dibujo.line([(x+r,y-r),(x,y-r//2)],fill=color,width=grosor)
+                            dibujo.line([(x+r,y-r),(x+r//2,y)],fill=color,width=grosor)
+                    except (TypeError,ValueError,KeyError): continue
+            salida=BytesIO(); im.save(salida,format='JPEG',quality=87)
+            return salida.getvalue(),im.size
+        except Exception: return None,None
+    def imagen_con_pie(datos,marcas,numero):
+        datos_procesados,tamano=foto_marcada(datos,marcas)
+        if not datos_procesados: return None
+        w,h=tamano; limite_ancho=ancho*.43-16; limite_alto=178
+        escala=min(limite_ancho/w,limite_alto/h)
+        img=Image(BytesIO(datos_procesados),width=w*escala,height=h*escala)
+        return [img,Spacer(1,5),P(f'Figura {numero:02d} · Registro fotográfico','pie_foto')]
+    def pie_pagina(canvas, documento):
+        canvas.saveState(); w,h=A4
+        canvas.setStrokeColor(borde);canvas.line(34,35,w-34,35)
+        canvas.setFont('Helvetica',7);canvas.setFillColor(colors.HexColor('#738395'))
+        canvas.drawString(34,24,'INGEPRO · DIVISIÓN MAESTRANZA · Documento técnico')
+        canvas.drawRightString(w-34,24,f'OT {ot.numero} · Página {documento.page}')
+        if documento.page>1:
+            canvas.setFont('Helvetica-Bold',8);canvas.setFillColor(azul)
+            canvas.drawString(34,h-29,'INGEPRO  |  INFORME DE DIAGNÓSTICO TÉCNICO')
+            canvas.setStrokeColor(azul);canvas.line(34,h-35,w-34,h-35)
+        canvas.restoreState()
+
     story=[]
     logo_path=os.path.join(app.root_path,'static','img','logo-ingepro.png')
-    logo=Image(logo_path,width=150,height=60) if os.path.exists(logo_path) else Paragraph('<b>INGEPRO</b>',styles['Heading1'])
-    head=Table([[logo,Paragraph(f'<b>DIVISIÓN MAESTRANZA</b><br/><font size="16">Informe de Diagnóstico Técnico</font><br/>{ot.numero}',styles['Heading2'])]],colWidths=[180,330])
-    head.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'MIDDLE'),('LINEBELOW',(0,0),(-1,-1),2,colors.HexColor('#0b6596')),('BOTTOMPADDING',(0,0),(-1,-1),8)])); story += [head,Spacer(1,12)]
-    meta=[['Cliente',ot.cliente],['Equipo',ot.equipo],['Serie / Tag',ot.serie or '-'],['Guía',ot.guia or '-'],['Fecha',datetime.now().strftime('%d/%m/%Y')],['Hallazgos',str(len(ot.hallazgos))]]
-    mt=Table(meta,colWidths=[100,410]); mt.setStyle(TableStyle([('GRID',(0,0),(-1,-1),.35,colors.lightgrey),('BACKGROUND',(0,0),(0,-1),colors.HexColor('#eef3f7')),('PADDING',(0,0),(-1,-1),5)])); story += [mt,Spacer(1,12)]
-    if ot.diagnostico: story += [Paragraph('<b>Resumen general</b>',styles['Heading3']),Paragraph(ot.diagnostico.replace('\
-','<br/>'),body),Spacer(1,10)]
-    if not ot.hallazgos: story.append(Paragraph('No existen hallazgos fotográficos registrados.',body))
-    for i,h in enumerate(ot.hallazgos,1):
-        if i>1: story.append(Spacer(1,8))
-        comp=(h.componente.codigo+' · ' if h.componente and h.componente.codigo else '')+(h.componente.nombre if h.componente else 'Inspección general')
-        story.append(Paragraph(f'<b>({i}) {comp}</b>',styles['Heading3']))
-        if h.foto_datos:
-            try:
-                foto_pdf=h.foto_datos
-                anotacion=DiagnosticoMarca.query.filter_by(hallazgo_id=h.id).first()
-                if anotacion:
-                    marcas=json.loads(anotacion.marcas_json or '[]')
-                    if marcas:
-                        img_pdf=PILImage.open(BytesIO(h.foto_datos)).convert('RGB')
-                        dib=ImageDraw.Draw(img_pdf); ancho,alto=img_pdf.size
-                        for m in marcas:
-                            x,y=int(m['x']*ancho),int(m['y']*alto)
-                            r=max(12,int(ancho*.055)); color=m['color']; grosor=max(3,int(ancho*.006))
-                            if m['tipo']=='circle':dib.ellipse((x-r,y-r,x+r,y+r),outline=color,width=grosor)
-                            elif m['tipo']=='square':dib.rectangle((x-r,y-r,x+r,y+r),outline=color,width=grosor)
-                            elif m['tipo']=='arrow':
-                                dib.line([(x-r,y+r),(x+r,y-r)],fill=color,width=grosor)
-                                dib.line([(x+r,y-r),(x,y-r//2)],fill=color,width=grosor)
-                                dib.line([(x+r,y-r),(x+r//2,y)],fill=color,width=grosor)
-                        out=BytesIO();img_pdf.save(out,format='JPEG',quality=85);foto_pdf=out.getvalue()
-                im=Image(BytesIO(foto_pdf)); im._restrictSize(245,260); story.append(im)
-            except: pass
-        for foto_extra in h.fotos_adicionales:
-            try:
-                bytes_foto=foto_extra.datos
-                marcas_extra=json.loads(foto_extra.marcas_json or '[]')
-                if marcas_extra:
-                    img_pdf=PILImage.open(BytesIO(bytes_foto)).convert('RGB')
-                    dib=ImageDraw.Draw(img_pdf);ancho,alto=img_pdf.size
-                    for m in marcas_extra:
-                        x,y=int(m['x']*ancho),int(m['y']*alto)
-                        r=max(12,int(ancho*.055));color=m['color'];grosor=max(3,int(ancho*.006))
-                        if m['tipo']=='circle':dib.ellipse((x-r,y-r,x+r,y+r),outline=color,width=grosor)
-                        elif m['tipo']=='square':dib.rectangle((x-r,y-r,x+r,y+r),outline=color,width=grosor)
-                        elif m['tipo']=='arrow':
-                            dib.line([(x-r,y+r),(x+r,y-r)],fill=color,width=grosor)
-                            dib.line([(x+r,y-r),(x,y-r//2)],fill=color,width=grosor)
-                            dib.line([(x+r,y-r),(x+r//2,y)],fill=color,width=grosor)
-                    out=BytesIO();img_pdf.save(out,format='JPEG',quality=85);bytes_foto=out.getvalue()
-                im=Image(BytesIO(bytes_foto));im._restrictSize(245,260);story.append(im)
-            except Exception: pass
-        txt=f'<b>Zona:</b> {h.zona or "-"}<br/><b>Condición encontrada:</b> {h.condicion}<br/><b>Trabajo recomendado:</b> {h.trabajo_recomendado or "-"}'
-        if h.observacion: txt+=f'<br/><b>Observación:</b> {h.observacion}'
-        txt+=f'<br/><b>Registrado:</b> {h.creado.strftime("%d/%m/%Y %H:%M") if h.creado else "-"} · {h.creado_por or "-"}'
-        story.append(Paragraph(txt,body))
-    doc.build(story); buf.seek(0); audit('PDF diagnóstico generado',ot.numero)
+    if os.path.exists(logo_path):
+        try:
+            with PILImage.open(logo_path) as im: lw,lh=im.size
+            factor=min(138/lw,53/lh)
+            logo=Image(logo_path,width=lw*factor,height=lh*factor)
+        except Exception: logo=P('INGEPRO','titulo')
+    else: logo=P('INGEPRO','titulo')
+    cabecera=Table([[logo,Paragraph('<b>INFORME DE DIAGNÓSTICO TÉCNICO</b><br/>'+
+                     escape(ot.numero)+' · Rev. 00<br/>'+datetime.now().strftime('%d/%m/%Y'),
+                     ParagraphStyle('v740_head',fontName='Helvetica',fontSize=9,leading=14,textColor=azul,alignment=TA_RIGHT))]],
+                   colWidths=[ancho*.33,ancho*.67])
+    cabecera.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'MIDDLE'),('BOTTOMPADDING',(0,0),(-1,-1),12),
+                                  ('LINEBELOW',(0,0),(-1,-1),3,azul)]))
+    story.extend([cabecera,Spacer(1,13)])
+    recibidos=[c for c in ot.componentes_detalle if (c.condicion_ingreso or '').strip().casefold()=='recibido']
+    ids_recibidos={c.id for c in recibidos}
+    hallazgos=[h for h in ot.hallazgos if h.ot_componente_id in ids_recibidos]
+    agrupados=defaultdict(list)
+    for h in hallazgos: agrupados[h.ot_componente_id].append(h)
+    story.extend(seccion('01. Antecedentes generales'))
+    campos=[('Cliente',ot.cliente),('OT INGEPRO',ot.numero),('Equipo',ot.equipo),
+            ('Serie / Tag',ot.serie or '-'),('Guía de ingreso',ot.guia or '-'),
+            ('Componentes recibidos',str(len(recibidos))),('Hallazgos registrados',str(len(hallazgos))),
+            ('Fecha de emisión',datetime.now().strftime('%d/%m/%Y'))]
+    celdas=[]
+    for i in range(0,len(campos),2):
+        fila=[]
+        for etiqueta,valor in campos[i:i+2]:
+            fila.append([P(etiqueta,'etiqueta'),Spacer(1,3),P(valor,'normal')])
+        celdas.append(fila)
+    meta=Table(celdas,colWidths=[ancho/2]*2,cornerRadii=[9,9,9,9]);tabla_estilo(meta,colors.HexColor('#f0f4f8'),9)
+    story.append(meta)
+    story.extend(seccion('02. Objetivo del diagnóstico'))
+    story.append(P('Documentar las condiciones identificadas durante la inspección de los componentes efectivamente recibidos en maestranza, con evidencia fotográfica, observaciones técnicas y recomendaciones de reparación.'))
+    if ot.diagnostico:
+        story.extend(seccion('Resumen general registrado en OT'))
+        story.append(P(ot.diagnostico))
+    story.extend(seccion('03. Diagnóstico por componente'))
+    if not recibidos: story.append(P('No existen componentes registrados como recibidos en esta OT.'))
+    contador_fotos=0
+    for indice,comp in enumerate(recibidos,1):
+        lista=agrupados.get(comp.id,[])
+        encabezado=Table([[P(f'COMPONENTE {indice:02d} · {comp.nombre.upper()}','blanco')],
+                           [Paragraph(escape(f'Código: {comp.codigo or "-"}  ·  {len(lista)} hallazgo(s)'),
+                            ParagraphStyle(f'v740_comp_{indice}',fontName='Helvetica',fontSize=7.5,leading=11,textColor=colors.HexColor('#d6e4ee')))]],
+                         colWidths=[ancho],cornerRadii=[7,7,7,7])
+        tabla_estilo(encabezado,azul,7)
+        story.extend([CondPageBreak(100),Spacer(1,10),encabezado,Spacer(1,8)])
+        if not lista:
+            story.append(P('Componente recibido sin hallazgos registrados.'))
+            continue
+        for numero,hallazgo in enumerate(lista,1):
+            fotos=[]
+            if hallazgo.foto_datos:
+                registro=DiagnosticoMarca.query.filter_by(hallazgo_id=hallazgo.id).first()
+                try: marcas=json.loads(registro.marcas_json or '[]') if registro else []
+                except (ValueError,TypeError): marcas=[]
+                fotos.append((hallazgo.foto_datos,marcas))
+            for foto in hallazgo.fotos_adicionales:
+                try: marcas=json.loads(foto.marcas_json or '[]')
+                except (ValueError,TypeError): marcas=[]
+                fotos.append((foto.datos,marcas))
+            comentario=[P('CONDICIÓN ENCONTRADA','etiqueta'),Spacer(1,3),P(hallazgo.condicion),Spacer(1,8),
+                        HRFlowable(width='100%',thickness=.5,color=colors.HexColor('#cad8e4')),Spacer(1,7),
+                        P('TRABAJO RECOMENDADO','etiqueta'),Spacer(1,3),P(hallazgo.trabajo_recomendado or '-'),Spacer(1,8),
+                        HRFlowable(width='100%',thickness=.5,color=colors.HexColor('#cad8e4')),Spacer(1,7),
+                        P('COMENTARIO TÉCNICO','etiqueta'),Spacer(1,3),P(hallazgo.observacion or '-')]
+            panel=Table([[comentario]],colWidths=[ancho*.55-16],cornerRadii=[9,9,9,9]);tabla_estilo(panel,suave,9)
+            titulo=P(f'Hallazgo {numero:02d} · {hallazgo.zona or "Inspección técnica"}','hallazgo')
+            if not fotos:
+                izquierda=[P('Sin fotografía registrada','peque')]
+                fila=Table([[izquierda,panel]],colWidths=[ancho*.45,ancho*.55])
+                fila.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'TOP'),('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),7)]))
+                story.append(KeepTogether([titulo,Spacer(1,6),fila,Spacer(1,12)]))
+            else:
+                for foto_indice,(datos,marcas) in enumerate(fotos):
+                    contador_fotos+=1
+                    izquierda=imagen_con_pie(datos,marcas,contador_fotos) or [P('Fotografía no disponible','peque')]
+                    derecha=panel if foto_indice==0 else P(f'Continuación del hallazgo {numero:02d} · Evidencia fotográfica adicional','peque')
+                    fila=Table([[izquierda,derecha]],colWidths=[ancho*.45,ancho*.55])
+                    fila.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'TOP'),('LEFTPADDING',(0,0),(-1,-1),0),
+                                              ('RIGHTPADDING',(0,0),(-1,-1),7),('TOPPADDING',(0,0),(-1,-1),4),
+                                              ('BOTTOMPADDING',(0,0),(-1,-1),4)]))
+                    bloque=[titulo if foto_indice==0 else P(f'Hallazgo {numero:02d} · Fotografía adicional','hallazgo'),Spacer(1,6),fila,Spacer(1,10)]
+                    # Mantener fotografía y comentario juntos en la misma página.
+                    story.append(KeepTogether(bloque))
+    story.extend(seccion('04. Resumen consolidado del diagnóstico'))
+    resumen=[[P('COMPONENTE','etiqueta'),P('HALLAZGOS','etiqueta'),P('ESTADO','etiqueta')]]
+    for c in recibidos:
+        hs=agrupados.get(c.id,[])
+        resumen.append([P(c.nombre,'peque'),P(str(len(hs)),'peque'),P(', '.join(sorted({h.estado or 'Pendiente' for h in hs})) if hs else 'Sin hallazgos','peque')])
+    t=Table(resumen,colWidths=[ancho*.48,ancho*.18,ancho*.34],repeatRows=1,cornerRadii=[7,7,7,7]);tabla_estilo(t,None,7)
+    t.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),suave),('LINEBELOW',(0,0),(-1,-1),.5,borde)]));story.append(t)
+    story.extend(seccion('05. Conclusión general de la OT'))
+    # La conclusión se toma de la OT, no se inventa una evaluación automática.
+    conclusion=ot.diagnostico or 'Conclusión general pendiente de registro por el área técnica.'
+    t=Table([[[P('EVALUACIÓN TÉCNICA CONSOLIDADA','etiqueta'),Spacer(1,5),P(conclusion)]]],
+            colWidths=[ancho],cornerRadii=[9,9,9,9]);tabla_estilo(t,suave,10);story.append(t)
+    story.extend(seccion('06. Responsables del informe'))
+    firmas=Table([[[P('ELABORADO POR','etiqueta'),Spacer(1,28),HRFlowable(width='95%',thickness=.6,color=borde),
+                     Spacer(1,5),P('Técnico responsable · Nombre / Firma / Fecha','peque')],
+                   [P('REVISADO POR','etiqueta'),Spacer(1,28),HRFlowable(width='95%',thickness=.6,color=borde),
+                     Spacer(1,5),P('Área de Ingeniería · Nombre / Firma / Fecha','peque')]]],
+                 colWidths=[ancho/2]*2,cornerRadii=[9,9,9,9]);tabla_estilo(firmas,colors.HexColor('#f0f4f8'),10)
+    story.append(firmas)
+    story.extend([Spacer(1,12),P('Este informe documenta las condiciones observadas durante el diagnóstico. Las reparaciones están sujetas a evaluación técnica, aprobación del alcance y condiciones contractuales aplicables.','peque')])
+    doc.build(story,onFirstPage=pie_pagina,onLaterPages=pie_pagina)
+    buf.seek(0)
+    audit('PDF diagnóstico generado',ot.numero)
     return send_file(buf,mimetype='application/pdf',as_attachment=True,download_name=f'Diagnostico-{ot.numero}.pdf')
 
 @app.route('/clientes')

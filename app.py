@@ -346,6 +346,9 @@ def asegurar_columnas():
             if n not in cols: db.session.execute(text(f'ALTER TABLE cliente ADD COLUMN {n} {t}'))
         try: db.session.execute(text('CREATE UNIQUE INDEX IF NOT EXISTS uq_cliente_rut ON cliente (rut) WHERE rut IS NOT NULL'))
         except: pass
+    if 'modelo_equipo' in insp.get_table_names():
+        cols={c['name'] for c in insp.get_columns('modelo_equipo')}
+        if 'materialidad' not in cols: db.session.execute(text('ALTER TABLE modelo_equipo ADD COLUMN materialidad VARCHAR(120)'))
     if 'componente_modelo' in insp.get_table_names():
         cols={c['name'] for c in insp.get_columns('componente_modelo')}
         defs={'codigo':'VARCHAR(80)','categoria':'VARCHAR(40)','material_default':'VARCHAR(80)','activo':'BOOLEAN DEFAULT TRUE'}
@@ -819,16 +822,38 @@ def diagnostico_pdf(ot_id):
                             dibujo.line([(x+r,y-r),(x,y-r//2)],fill=color,width=grosor)
                             dibujo.line([(x+r,y-r),(x+r//2,y)],fill=color,width=grosor)
                     except (TypeError,ValueError,KeyError): continue
-            salida=BytesIO(); im.save(salida,format='JPEG',quality=87)
+            # Redondeo sutil aplicado sobre los píxeles de la fotografía.
+            # Se conserva toda la imagen y su proporción; solo se suavizan las cuatro esquinas.
+            radio=max(2, round(min(im.size)*0.012))
+            mascara=PILImage.new('L',im.size,0)
+            ImageDraw.Draw(mascara).rounded_rectangle((0,0,im.width-1,im.height-1),radius=radio,fill=255)
+            rgba=im.convert('RGBA'); rgba.putalpha(mascara)
+            salida=BytesIO(); rgba.save(salida,format='PNG',optimize=True)
             return salida.getvalue(),im.size
         except Exception: return None,None
     def imagen_con_pie(datos,marcas,numero):
         datos_procesados,tamano=foto_marcada(datos,marcas)
         if not datos_procesados: return None
-        w,h=tamano; limite_ancho=ancho*.43-16; limite_alto=178
+        w,h=tamano
+        # La fotografía ocupa como máximo el ancho útil de su columna,
+        # sin recortar, deformar ni alterar su relación ancho/alto.
+        columna_foto=ancho*.45
+        limite_ancho=columna_foto-14
+        limite_alto=210
         escala=min(limite_ancho/w,limite_alto/h)
         img=Image(BytesIO(datos_procesados),width=w*escala,height=h*escala)
-        return [img,Spacer(1,5),P(f'Figura {numero:02d} · Registro fotográfico','pie_foto')]
+        img.hAlign='CENTER'
+        pie=P(f'Figura {numero:02d} · Registro fotográfico','pie_foto')
+        # Celda interna de ancho completo: centra fotos verticales y horizontales.
+        centrado=Table([[img],[pie]],colWidths=[columna_foto-7])
+        centrado.setStyle(TableStyle([
+            ('ALIGN',(0,0),(-1,-1),'CENTER'),
+            ('VALIGN',(0,0),(-1,-1),'TOP'),
+            ('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),0),
+            ('TOPPADDING',(0,0),(-1,-1),0),('BOTTOMPADDING',(0,0),(0,0),5),
+            ('BOTTOMPADDING',(0,1),(0,1),0)
+        ]))
+        return centrado
     def pie_pagina(canvas, documento):
         canvas.saveState(); w,h=A4
         canvas.setStrokeColor(borde);canvas.line(34,35,w-34,35)
@@ -920,7 +945,7 @@ def diagnostico_pdf(ot_id):
             else:
                 for foto_indice,(datos,marcas) in enumerate(fotos):
                     contador_fotos+=1
-                    izquierda=imagen_con_pie(datos,marcas,contador_fotos) or [P('Fotografía no disponible','peque')]
+                    izquierda=imagen_con_pie(datos,marcas,contador_fotos) or P('Fotografía no disponible','peque')
                     derecha=panel if foto_indice==0 else P(f'Continuación del hallazgo {numero:02d} · Evidencia fotográfica adicional','peque')
                     fila=Table([[izquierda,derecha]],colWidths=[ancho*.45,ancho*.55])
                     fila.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'TOP'),('LEFTPADDING',(0,0),(-1,-1),0),

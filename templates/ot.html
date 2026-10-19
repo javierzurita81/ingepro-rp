@@ -15,6 +15,35 @@
  <p class="muted" style="font-size:12px;margin:10px 0 0">Verde: completada · Rojo: pendiente y habilitada · Gris: inhabilitada hasta cumplir requisitos. La cotización rechazada detiene la reparación.</p>
 </section>
 {% if not ot.componentes_detalle %}<div class="card warning"><h2>Esta OT aún no tiene despiece</h2><p>Selecciona el modelo para cargar sus componentes. Después registra los elementos recibidos en el módulo de ingreso.</p><form method="post" action="{{url_for('ot_cargar_despiece',ot_id=ot.id)}}"><label>Modelo<select name="modelo_id" required><option value="">Seleccionar modelo...</option>{% for m in modelos %}<option value="{{m.id}}">{{m.tipo}} · {{m.marca}} · {{m.modelo}}</option>{% endfor %}</select></label><button class="primary">Cargar despiece en esta OT</button></form></div>{% endif %}
+<section class="card" style="margin:12px 0 18px"><h2>Datos de ingreso de equipo</h2>
+<p class="muted">La OT y la recepción inicial conservan su fecha y usuario originales. Los demás datos pueden actualizarse.</p>
+<form method="post" class="panel" style="margin:0"><input type="hidden" name="datos_ingreso" value="1">
+<div class="ot-admin-grid">
+<label>Tipo de equipo<input value="{{ot.modelo_equipo.tipo if ot.modelo_equipo else ot.equipo}}" readonly></label>
+<label>Marca<input value="{{ot.modelo_equipo.marca if ot.modelo_equipo else '—'}}" readonly></label>
+<label>Modelo<input value="{{ot.modelo_equipo.modelo if ot.modelo_equipo else '—'}}" readonly></label>
+<label>Materialidad<input value="{{ot.materialidad or (ot.modelo_equipo.materialidad if ot.modelo_equipo else '') or 'Sin registro histórico'}}" readonly></label>
+<label>Fecha ingreso OT<input value="{{ot.fecha.strftime('%d/%m/%Y %H:%M') if ot.fecha else '—'}}" readonly></label>
+<label>Fecha envío cliente *<input type="date" name="fecha_envio_cliente" required value="{{ot.fecha_envio_cliente.isoformat() if ot.fecha_envio_cliente else ''}}"></label>
+<label>Nombre cliente *<select name="cliente_id" required><option value="">Seleccionar...</option>{% for cliente in clientes %}<option value="{{cliente.id}}" {% if cliente.nombre==ot.cliente %}selected{% endif %}>{{cliente.nombre}}</option>{% endfor %}</select></label>
+<label>OT cliente<input name="ot_cliente" value="{{ot.ot_cliente or ''}}" maxlength="120"></label>
+<label>Guía despacho *<input name="guia" value="{{ot.guia or ''}}" maxlength="80" required></label>
+<label>Número de parte<input name="numero_parte" value="{{ot.numero_parte or ''}}" maxlength="120"></label>
+<label>N.º identificación<input name="numero_identificacion" value="{{ot.numero_identificacion or ot.serie or ''}}" maxlength="120"></label>
+<label>Recibe INGEPRO<input value="{{ot.recibido_bodega_por or 'Sin registro histórico'}}" readonly></label>
+</div><button class="primary" type="submit">Guardar datos de ingreso</button></form></section>
+<section class="card" style="margin:12px 0 18px"><h2>Agregar componentes recibidos a esta OT</h2>
+<p class="muted">Se incorporan al diagnóstico de la misma OT, sin borrar hallazgos ni componentes anteriores.</p>
+{% if ot.modelo_equipo %}
+<form method="post" action="{{url_for('agregar_componentes_ot',ot_id=ot.id)}}"><div class="checks">
+{% set disponibles=namespace(total=0) %}
+{% for cm in ot.modelo_equipo.componentes %}{% if cm.activo is not false %}
+{% set registrado=namespace(recibido=false) %}{% for c in ot.componentes_detalle %}{% if c.componente_modelo_id==cm.id and (c.condicion_ingreso or '')|trim|lower=='recibido' %}{% set registrado.recibido=true %}{% endif %}{% endfor %}
+{% if not registrado.recibido %}{% set disponibles.total=disponibles.total+1 %}<label class="check"><input type="checkbox" name="componentes_nuevos" value="{{cm.id}}"><span><b>{{cm.codigo or cm.nombre}}</b><small>{{cm.nombre}}{% if cm.material_default %} · {{cm.material_default}}{% endif %}</small></span></label>{% endif %}
+{% endif %}{% endfor %}</div>
+{% if disponibles.total %}<button class="primary" type="submit">+ Agregar componentes seleccionados</button>{% else %}<p class="muted">Todos los componentes del catálogo ya están recibidos.</p>{% endif %}</form>
+{% else %}<p class="muted">Vincula primero el modelo de equipo para mostrar los componentes disponibles.</p>{% endif %}
+</section>
 <form method="post" class="panel wide ot-clean-form" id="ot-datos">
  <div class="ot-section-head"><h2>Despiece / control de componentes</h2><span class="ot-received-tag">Solo recibidos</span></div>
  <p class="muted">Componentes que ingresaron físicamente a maestranza. La resolución indica qué hará INGEPRO con cada elemento.</p>

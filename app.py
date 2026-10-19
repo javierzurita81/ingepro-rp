@@ -638,6 +638,48 @@ def ver_ot(ot_id):
     return render_template('ot.html',ot=ot,modelos=modelos,pasos=pasos,condicion=condicion,cot_activa=q)
 
 
+@app.route('/ot/<int:ot_id>/agregar-componentes', methods=['POST'])
+@permiso_required('ingreso')
+def agregar_componentes_ot(ot_id):
+    """Recibe componentes del catálogo en una OT existente sin alterar diagnósticos."""
+    ot=db.session.get(OT, ot_id) or abort(404)
+    modelo=ot.modelo_equipo or inferir_modelo_ot(ot)
+    if not modelo:
+        flash('Primero debes vincular un modelo a esta OT.')
+        return redirect(url_for('ver_ot', ot_id=ot.id))
+    valores=request.form.getlist('componentes_nuevos')
+    ids=set()
+    for valor in valores:
+        try: ids.add(int(valor))
+        except (TypeError, ValueError): abort(400)
+    if not ids:
+        flash('Selecciona al menos un componente.')
+        return redirect(url_for('ver_ot', ot_id=ot.id))
+    permitidos={c.id:c for c in modelo.componentes if c.activo is not False}
+    if not ids.issubset(permitidos): abort(400)
+    agregados=0
+    reactivados=0
+    for cid in sorted(ids):
+        cm=permitidos[cid]
+        existente=next((c for c in ot.componentes_detalle if c.componente_modelo_id==cid), None)
+        if existente:
+            if (existente.condicion_ingreso or '').strip().casefold()!='recibido':
+                existente.condicion_ingreso='Recibido'
+                reactivados+=1
+        else:
+            db.session.add(OTComponente(ot_id=ot.id, componente_modelo_id=cm.id,
+                nombre=cm.nombre, codigo=cm.codigo,
+                categoria=cm.categoria or 'Componente reparable',
+                condicion_ingreso='Recibido', material=cm.material_default))
+            agregados+=1
+    db.session.flush()
+    ot.componente=', '.join(c.nombre for c in ot.componentes_detalle
+        if (c.condicion_ingreso or '').strip().casefold()=='recibido')
+    db.session.commit()
+    audit('Componentes recibidos agregados a OT', f'{ot.numero}: {agregados} nuevos, {reactivados} actualizados')
+    flash(f'Componentes recibidos actualizados: {agregados} nuevos y {reactivados} existentes.')
+    return redirect(url_for('ver_ot', ot_id=ot.id))
+
 @app.route('/ot/<int:ot_id>/vincular-componente', methods=['POST'])
 @permiso_required('ingreso')
 def vincular_componente_ot(ot_id):

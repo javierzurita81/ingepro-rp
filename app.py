@@ -520,7 +520,13 @@ def nueva_ot():
             db.session.add(OTComponente(ot_id=ot.id,componente_modelo_id=c.id,nombre=c.nombre,codigo=c.codigo,categoria=c.categoria or 'Componente reparable',condicion_ingreso=cond,material=c.material_default))
         ot.componente=', '.join(nombres) if nombres else 'Sin componentes marcados como recibidos'
         db.session.commit(); audit('OT creada',ot.numero); flash(f'{ot.numero} creada correctamente'); return redirect(url_for('ver_ot',ot_id=ot.id))
-    return render_template('nueva.html',clientes=clientes,modelos=modelos)
+    # El formulario utiliza `catalogo|tojson`: pasar solo valores JSON serializables.
+    catalogo=[]
+    for m in modelos:
+        materiales=sorted({(c.material_default or '').strip() for c in m.componentes if c.activo is not False and (c.material_default or '').strip()})
+        materialidad=' / '.join(materiales)
+        catalogo.append({'id':m.id,'tipo':m.tipo or '', 'marca':m.marca or '', 'modelo':m.modelo or '', 'materialidad':materialidad})
+    return render_template('nueva.html',clientes=clientes,modelos=modelos,catalogo=catalogo)
 def cargar_despiece_ot(ot, modelo):
     if ot.componentes_detalle:
         return 0

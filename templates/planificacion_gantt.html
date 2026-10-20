@@ -33,14 +33,14 @@
 </div>
 <dialog class="gantt-dialog" id="gantt-dialog"><h3 id="gantt-title" style="margin:0;font-size:15px"></h3><p id="gantt-sub" style="font-size:12px;color:#667085"></p><form id="gantt-form">
 <input type="hidden" name="ot_id" id="gantt-ot"><input type="hidden" name="ot_componente_id" id="gantt-comp"><input type="hidden" name="reparacion_maestra_id" id="gantt-rep"><input type="hidden" name="fecha_inicio" id="gantt-start"><input type="hidden" name="fecha_fin" id="gantt-end">
-<label>Trabajador</label><select name="usuario_id" id="gantt-worker" required></select><label>Horas planificadas</label><input type="number" min="0.5" max="9" step="0.5" name="horas_dia" id="gantt-hours" value="2" required><input type="hidden" name="estado" value="Planificada"><div id="gantt-error" style="color:#b42318;font-size:11px;margin-top:8px" role="alert"></div><footer><button type="button" id="gantt-delete" style="margin-right:auto">Eliminar</button><button type="button" id="gantt-cancel">Cancelar</button><button type="submit">Guardar</button></footer></form></dialog>
+<label>Trabajador</label><select name="usuario_id" id="gantt-worker" required></select><label>Horas planificadas</label><input type="number" min="0.5" max="9" step="0.5" name="horas_dia" id="gantt-hours" value="2" required><input type="hidden" name="estado" value="Planificada"><div id="gantt-error" style="color:#b42318;font-size:11px;margin-top:8px" role="alert"></div><footer><button type="button" id="gantt-release" style="display:none;background:#e5f6e9;color:#166534">Liberar edición</button><button type="button" id="gantt-delete" style="margin-right:auto">Eliminar</button><button type="button" id="gantt-cancel">Cancelar</button><button type="submit">Guardar</button></footer></form></dialog>
 <script>
-const GOTS={{ gantt_data|tojson }}, GW={{ gantt_workers|tojson }}, YEAR={{anio}}, MONTH={{mes}};
+const IS_SUPERVISOR={{ es_supervisor|tojson }}, GOTS={{ gantt_data|tojson }}, GW={{ gantt_workers|tojson }}, YEAR={{anio}}, MONTH={{mes}};
 const months=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
 const last=new Date(YEAR,MONTH,0).getDate(), weekdays=['D','L','M','M','J','V','S'];
 const expanded=new Set(GOTS.map(o=>o.id)), table=document.getElementById('gantt-table'), viewport=document.getElementById('gantt-viewport');
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-function row(type,label,meta){const tr=document.createElement('tr');tr.className='gantt-'+type;const left=document.createElement(type==='head'?'th':'td');left.className='gantt-fixed';left.textContent=label;tr.appendChild(left);if(type==='task'&&meta.task.rep){left.innerHTML=`<span class="gantt-stage-label" title="${esc(label)}">${esc(label)}</span><button type="button" class="gantt-state ${meta.task.no_aplica?'is-na':'is-aplica'}" aria-label="Cambiar estado de ${esc(label)}" aria-pressed="${meta.task.no_aplica?'true':'false'}" title="Haz clic para cambiar entre Aplica y No aplica">${meta.task.no_aplica?'No aplica':'Aplica'}</button>`;const sel=left.querySelector('button');sel.onclick=e=>{e.stopPropagation();updateStage(meta,sel)};if(meta.task.no_aplica)tr.classList.add('gantt-na')}if(type==='ot'){left.onclick=()=>{expanded.has(meta.id)?expanded.delete(meta.id):expanded.add(meta.id);render()};left.title='Expandir / contraer'}
+function row(type,label,meta){const tr=document.createElement('tr');tr.className='gantt-'+type;const left=document.createElement(type==='head'?'th':'td');left.className='gantt-fixed';left.textContent=label;tr.appendChild(left);if(type==='task'&&meta.task.rep){left.innerHTML=`<span class="gantt-stage-label" title="${esc(label)}">${esc(label)}</span><button type="button" class="gantt-state ${meta.task.no_aplica?'is-na':'is-aplica'}" aria-label="Cambiar estado de ${esc(label)}" aria-pressed="${meta.task.no_aplica?'true':'false'}" title="Haz clic para cambiar entre Aplica y No aplica">${meta.task.no_aplica?'No aplica':'Aplica'}</button>`;const sel=left.querySelector('button');sel.onclick=e=>{e.stopPropagation();updateStage(meta,sel)};if(IS_SUPERVISOR){sel.disabled=true;sel.title='Solo el administrador puede cambiar Aplica / No aplica'};if(meta.task.no_aplica)tr.classList.add('gantt-na')}if(type==='ot'){left.onclick=()=>{expanded.has(meta.id)?expanded.delete(meta.id):expanded.add(meta.id);render()};left.title='Expandir / contraer'}
  for(let d=1;d<=last;d++){const dow=new Date(YEAR,MONTH-1,d).getDay();const td=document.createElement(type==='head'?'th':'td');td.className='gantt-day'+([0,6].includes(dow)?' gantt-weekend':'');if(type==='head'){td.innerHTML=d+'<div style="font-size:9px;color:#667085">'+weekdays[dow]+'</div>'}if(type==='task'){if(meta.task.no_aplica){td.textContent='—';tr.appendChild(td);continue}const date=`${YEAR}-${String(MONTH).padStart(2,'0')}-${String(d).padStart(2,'0')}`;const found=meta.task.assignments.filter(a=>a.start<=date&&a.end>=date);if(found.length){const a=found[0],w=GW.find(w=>w.id===a.worker);td.innerHTML=`<div class="gantt-entry"><span>${esc(w?.sigla||a.sigla)} ${a.hours}h${found.length>1?' +'+(found.length-1):''}</span><i class="gantt-bar" style="background:${esc(w?.color||'#64748b')}"></i></div>`}else td.textContent='·';td.onclick=()=>openEditor(meta,date,found)}tr.appendChild(td)}return tr}
 async function updateStage(meta,sel){const old=meta.task.no_aplica;const next=!old;if(next&&meta.task.assignments.length){alert('Esta etapa tiene horas asignadas. Elimine primero las asignaciones desde sus casillas para marcar No aplica.');return}sel.disabled=true;try{const r=await fetch({{url_for('plan_reparacion_estado')|tojson}},{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ot_id:meta.ot.id,ot_componente_id:meta.comp.id,reparacion_maestra_id:meta.task.rep,accion:next?'no_aplica':'revertir'})});const j=await r.json();if(!r.ok||!j.ok)throw new Error(j.error||'No se pudo actualizar.');meta.task.no_aplica=next;render()}catch(e){alert(e.message);}finally{sel.disabled=false}}
 function render(){const x=viewport.scrollLeft;const cols=document.createElement('colgroup');const fixed=document.createElement('col');fixed.style.width='205px';cols.appendChild(fixed);for(let d=1;d<=last;d++){const col=document.createElement('col');col.style.width='43px';cols.appendChild(col)}const head=document.createElement('thead');head.appendChild(row('head','OT / Componente / Etapa'));const body=document.createElement('tbody');for(const o of GOTS){body.appendChild(row('ot',(expanded.has(o.id)?'▾ ':'▸ ')+o.numero,o));if(!expanded.has(o.id))continue;for(const c of o.components){body.appendChild(row('comp',c.nombre));for(const t of c.tasks)body.appendChild(row('task',t.name,{ot:o,comp:c,task:t}))}}table.replaceChildren(cols,head,body);document.getElementById('gantt-count').textContent=`${expanded.size} de ${GOTS.length} OT desplegadas`;viewport.scrollLeft=x}
@@ -48,7 +48,7 @@ const pdfWorker=document.getElementById('gantt-pdf-worker');pdfWorker.innerHTML+
 const dialog=document.getElementById('gantt-dialog');document.getElementById('gantt-worker').innerHTML=GW.map(w=>`<option value="${w.id}">${esc(w.sigla)} · ${esc(w.name)}</option>`).join('');
 let currentCell=null;
 function openEditor(meta,date,found){
- if(meta.task.no_aplica)return;const a=found.length?found[0]:null;
+ if(meta.task.no_aplica)return;const a=found.length?found[0]:null;if(IS_SUPERVISOR&&a&&!a.liberada){alert('Asignación bloqueada. Solicite al administrador liberar esta asignación.');return;}
  if(!a&&!meta.task.rep){alert('Esta tarea histórica solo admite editar asignaciones existentes.');return}
  currentCell={meta,date,assignment:a};
  document.getElementById('gantt-title').textContent=meta.task.name;
@@ -62,7 +62,8 @@ function openEditor(meta,date,found){
  const dow=new Date(date+'T12:00:00').getDay();
  document.getElementById('gantt-hours').max=(dow===1||dow===2)?9:8;
  document.getElementById('gantt-hours').value=a?.hours||2;
- document.getElementById('gantt-delete').style.display=a?'':'none';
+ document.getElementById('gantt-delete').style.display=(a&&!IS_SUPERVISOR)?'':'none';
+ document.getElementById('gantt-release').style.display=(a&&!IS_SUPERVISOR&&!a.liberada)?'':'none';
  document.getElementById('gantt-error').textContent=found.length>1?'Hay varios responsables; se editará el primero.':'';
  dialog.showModal();
 }
@@ -73,6 +74,8 @@ async function submitQuick(action){
  const error=document.getElementById('gantt-error');error.textContent='';
  try{
   const response=await fetch({{url_for('api_gantt_rapido')|tojson}},{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  const contentType=response.headers.get('content-type')||'';
+  if(!contentType.includes('application/json')){error.textContent=response.status===403?'No tienes permiso para realizar esta operación.':'El servidor devolvió un error HTTP '+response.status+'. No se guardaron cambios.';return;}
   const result=await response.json();
   if(!response.ok||!result.ok){error.textContent=result.error||'No se pudo guardar.';return}
   dialog.close();window.location.reload();
@@ -80,6 +83,13 @@ async function submitQuick(action){
 }
 document.getElementById('gantt-form').addEventListener('submit',e=>{e.preventDefault();submitQuick('guardar')});
 document.getElementById('gantt-delete').onclick=()=>submitQuick('eliminar');
+document.getElementById('gantt-release').onclick=async()=>{
+ const a=currentCell?.assignment;if(!a||IS_SUPERVISOR)return;
+ if(!confirm('¿Liberar esta asignación para una modificación del supervisor?'))return;
+ const error=document.getElementById('gantt-error');
+ try{const r=await fetch('/api/planificacion/asignacion/'+encodeURIComponent(a.id)+'/liberar',{method:'POST'});const j=await r.json();if(!r.ok||!j.ok){error.textContent=j.error||'No se pudo liberar.';return;}dialog.close();window.location.reload();}
+ catch(e){error.textContent='No fue posible comunicarse con el servidor.';}
+};
 document.getElementById('gantt-cancel').onclick=()=>dialog.close();document.getElementById('gantt-expand').onclick=()=>{GOTS.forEach(o=>expanded.add(o.id));render()};document.getElementById('gantt-collapse').onclick=()=>{expanded.clear();render()};
 const nav=(delta)=>{let d=new Date(YEAR,MONTH-1+delta,1);return '?mes='+(d.getMonth()+1)+'&anio='+d.getFullYear()};document.getElementById('gantt-prev').href=nav(-1);document.getElementById('gantt-next').href=nav(1);document.getElementById('gantt-month').textContent=months[MONTH-1]+' '+YEAR;
 document.getElementById('gantt-legend').innerHTML=GW.map(w=>`<span><i style="background:${esc(w.color)}"></i>${esc(w.sigla)} · ${esc(w.name)}</span>`).join('');render();

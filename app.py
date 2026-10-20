@@ -114,6 +114,16 @@ class PlanActividad(db.Model):
     responsable=db.relationship('Usuario')
 
 
+class PlanLiberacion(db.Model):
+    """Autorización individual, de un solo uso, para editar una asignación."""
+    id=db.Column(db.Integer,primary_key=True)
+    asignacion_id=db.Column(db.Integer,db.ForeignKey('plan_actividad.id'),nullable=False,unique=True,index=True)
+    liberado_por_id=db.Column(db.Integer,db.ForeignKey('usuario.id'),nullable=False)
+    liberado_fecha=db.Column(db.DateTime,nullable=False,default=datetime.utcnow)
+    consumido_por_id=db.Column(db.Integer,db.ForeignKey('usuario.id'))
+    consumido_fecha=db.Column(db.DateTime)
+
+
 class ProduccionEtapa(db.Model):
     id=db.Column(db.Integer,primary_key=True)
     ot_id=db.Column(db.Integer,db.ForeignKey('ot.id'),nullable=False,index=True)
@@ -268,10 +278,10 @@ def es_supervisor():
 SUPERVISOR_GET={'index','control_general_ot','nueva_ot','ver_ot','diagnostico_ot',
     'diagnostico_foto','diagnostico_foto_adicional','diagnostico_pdf',
     'diagnostico_editar','produccion','planificacion_gantt','planificacion_gantt_pdf',
-    'componentes_modelo','logout','login','static'}
+    'componentes_modelo','oti_lista','oti_seleccionar','oti_editar','oti_pdf','logout','login','static'}
 SUPERVISOR_POST={'nueva_ot','diagnostico_ot','diagnostico_editar',
     'diagnostico_marcas','diagnostico_foto_marcas','diagnostico_foto_eliminar',
-    'produccion_terminar'}
+    'produccion_terminar','oti_nueva','oti_editar','api_gantt_rapido'}
 
 @app.before_request
 def supervisores_rutas_seguras():
@@ -1510,7 +1520,7 @@ def planificacion_gantt():
         if componentes: lista.append({'id':ot.id,'numero':ot.numero,'componentes':componentes})
     import json as _json
     def ajson(a):
-        return {'id':a.id,'worker':a.usuario_id,'start':a.fecha_inicio.isoformat(),'end':a.fecha_fin.isoformat(),'hours':a.horas_dia,'sigla':a.responsable.sigla if a.responsable else '?'}
+        return {'id':a.id,'worker':a.usuario_id,'start':a.fecha_inicio.isoformat(),'end':a.fecha_fin.isoformat(),'hours':a.horas_dia,'sigla':a.responsable.sigla if a.responsable else '?','liberada':bool(PlanLiberacion.query.filter_by(asignacion_id=a.id,consumido_fecha=None).first())}
     data=[{'id':o['id'],'numero':o['numero'],'components':[{'id':c['id'],'nombre':c['nombre'],'tasks':[{'name':e['nombre'],'rep':e['rep_id'],'assignments':[ajson(a) for a in e['actividades']],'no_aplica':e.get('no_aplica',False)} for e in c['etapas']]} for c in o['componentes']]} for o in lista]
     workers=[{'id':u.id,'name':u.nombre,'sigla':u.sigla or u.nombre[:2],'color':(u.color or '#64748b')} for u in trabajadores]
     return render_template('planificacion_gantt.html',gantt_data=data,gantt_workers=workers,mes=mes,anio=anio)
@@ -1586,6 +1596,24 @@ def planificacion_gantt_pdf(tipo):
     return send_file(buffer,mimetype='application/pdf',as_attachment=True,download_name=f'INGEPRO_{tipo}_{anio}_{mes:02d}.pdf')
 
 
+@app.route('/api/planificacion/asignacion/<int:aid>/liberar',methods=['POST'])
+@permiso_required('planificacion')
+def plan_liberar(aid):
+    if not usuario_actual().es_admin: return jsonify(error='Solo el administrador puede liberar asignaciones.'),403
+    asignacion=db.session.get(PlanActividad,aid)
+    if not asignacion: return jsonify(error='Asignación no encontrada.'),404
+    permiso=PlanLiberacion.query.filter_by(asignacion_id=aid).first()
+    if not permiso:
+        permiso=PlanLiberacion(asignacion_id=aid,liberado_por_id=usuario_actual().id)
+        db.session.add(permiso)
+    permiso.liberado_por_id=usuario_actual().id
+    permiso.liberado_fecha=datetime.utcnow()
+    permiso.consumido_por_id=None
+    permiso.consumido_fecha=None
+    db.session.commit()
+    audit('Asignación liberada por administrador',f'Asignación {aid}, OT {asignacion.ot_id}, administrador {usuario_actual().username}')
+    return jsonify(ok=True,mensaje='Asignación liberada para una modificación del supervisor.')
+
 @app.route('/api/planificacion/gantt/rapido', methods=['POST'])
 @permiso_required('planificacion')
 def api_gantt_rapido():
@@ -1604,6 +1632,15 @@ def api_gantt_rapido():
     ot=db.session.get(OT,ot_id); comp=db.session.get(OTComponente,comp_id)
     if not ot or not comp or comp.ot_id!=ot_id or (comp.condicion_ingreso or '').casefold()!='recibido':
         return jsonify(error='OT o componente no disponible.'),400
+    # V7.56: supervisor puede CREAR, pero no alterar ni eliminar una asignación.
+    # La validación es del servidor, no depende de controles HTML.
+    if es_supervisor():
+        if accion!='guardar':
+            return jsonify(error='El supervisor no puede eliminar asignaciones.'),403
+        if aid:
+            permiso=PlanLiberacion.query.filter_by(asignacion_id=aid,consumido_fecha=None).first()
+            if not permiso:
+                return jsonify(error='Asignación bloqueada. Solicite su liberación al administrador.'),403
     original=db.session.get(PlanActividad,aid) if aid else None
     if aid and (not original or original.ot_id!=ot_id or original.ot_componente_id!=comp_id or not(original.fecha_inicio<=dia<=original.fecha_fin)):
         return jsonify(error='La asignación ya no corresponde a esta casilla.'),409
@@ -1641,7 +1678,12 @@ def api_gantt_rapido():
         db.session.add(PlanActividad(ot_id=ot_id,ot_componente_id=comp_id,reparacion_maestra_id=rep_id,usuario_id=uid,tarea=rep.nombre,fecha_inicio=dia,fecha_fin=dia,horas_dia=horas,estado='Planificada'))
         if not OTReparacionSeleccionada.query.filter_by(ot_id=ot_id,ot_componente_id=comp_id,reparacion_maestra_id=rep_id).first():
             db.session.add(OTReparacionSeleccionada(ot_id=ot_id,ot_componente_id=comp_id,reparacion_maestra_id=rep_id))
+    if es_supervisor() and original:
+        permiso.consumido_por_id=usuario_actual().id
+        permiso.consumido_fecha=datetime.utcnow()
     db.session.commit()
+    if es_supervisor() and original:
+        audit('Asignación modificada tras liberación',f'Asignación {aid}; administrador liberador {permiso.liberado_por_id}; supervisor {usuario_actual().username}')
     audit('Gantt edición rápida',f'OT {ot.numero} / {dia.isoformat()} / {accion}')
     return jsonify(ok=True)
 
@@ -1723,6 +1765,7 @@ def api_plan_ot_estado(ot_id):
 @app.route('/planificacion/<int:aid>/editar',methods=['GET','POST'])
 @permiso_required('planificacion')
 def plan_editar(aid):
+    if es_supervisor(): abort(403)
     a=db.session.get(PlanActividad,aid) or abort(404)
     if request.method=='POST':
         usuario=db.session.get(Usuario,int(request.form.get('usuario_id') or 0))
@@ -1746,6 +1789,7 @@ def plan_editar(aid):
 @app.route('/planificacion/<int:aid>/duplicar',methods=['POST'])
 @permiso_required('planificacion')
 def plan_duplicar(aid):
+    if es_supervisor(): abort(403)
     a=db.session.get(PlanActividad,aid) or abort(404)
     u=db.session.get(Usuario,int(request.form.get('usuario_id') or 0))
     if not u or not u.activo or not u.disponible_planificacion: abort(400)
@@ -1761,6 +1805,7 @@ def plan_duplicar(aid):
 @app.route('/planificacion/<int:aid>/eliminar',methods=['POST'])
 @permiso_required('planificacion')
 def plan_eliminar(aid):
+    if es_supervisor(): abort(403)
     a=db.session.get(PlanActividad,aid) or abort(404); m=a.fecha_inicio.month; y=a.fecha_inicio.year; db.session.delete(a); db.session.commit(); audit('Asignación eliminada',f'{a.ot.numero}: {a.tarea}'); flash('Asignación eliminada; la OT y el diagnóstico permanecen intactos.'); return redirect(url_for('planificacion',mes=m,anio=y))
 
 def cotizacion_activa_ot(ot_id):

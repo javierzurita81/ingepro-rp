@@ -2070,9 +2070,36 @@ def oti_origen(ot):
 @app.route('/ot-internas')
 @permiso_required('planificacion')
 def oti_lista():
-    items=OTInterna.query.order_by(OTInterna.id.desc()).limit(150).all()
-    ots=OT.query.order_by(OT.fecha.desc()).limit(300).all()
-    return render_template('ot_internas.html',items=items,ots=ots)
+    buscar=(request.args.get('buscar') or '').strip()[:120]
+    estado=(request.args.get('estado') or '').strip()
+    consulta=OTInterna.query.join(OT,OTInterna.ot_id==OT.id)
+    if estado in ('Borrador','Emitida'):
+        consulta=consulta.filter(OTInterna.estado==estado)
+    else:
+        estado=''
+    if buscar:
+        from sqlalchemy import or_
+        termino=f'%{buscar}%'
+        consulta=consulta.filter(or_(OTInterna.numero.ilike(termino),OT.numero.ilike(termino),OT.cliente.ilike(termino),OT.equipo.ilike(termino)))
+    items=consulta.order_by(OTInterna.id.desc()).limit(200).all()
+    return render_template('ot_internas.html',items=items,buscar=buscar,estado=estado)
+
+@app.route('/ot-internas/nueva',methods=['GET'])
+@permiso_required('planificacion')
+def oti_seleccionar():
+    buscar=(request.args.get('buscar') or '').strip()[:120]
+    consulta=OT.query
+    if buscar:
+        from sqlalchemy import or_
+        termino=f'%{buscar}%'
+        consulta=consulta.filter(or_(OT.numero.ilike(termino),OT.cliente.ilike(termino),OT.equipo.ilike(termino)))
+    ots=consulta.order_by(OT.fecha.desc(),OT.id.desc()).limit(300).all()
+    # Se cuentan solo los componentes recibidos; la OT se crea usando oti_origen.
+    opciones=[]
+    for ot in ots:
+        recibidos=[c for c in ot.componentes_detalle if (c.condicion_ingreso or '').strip().casefold()=='recibido']
+        opciones.append({'ot':ot,'componentes':len(recibidos)})
+    return render_template('ot_interna_nueva.html',opciones=opciones,buscar=buscar)
 
 @app.route('/ot-internas/nueva/<int:ot_id>',methods=['POST'])
 @permiso_required('planificacion')

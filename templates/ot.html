@@ -1,4 +1,5 @@
 {% extends 'base.html' %}{% block c %}
+<div class="actionrow" style="margin-bottom:12px"><a class="btn primary" href="{{url_for('salida_ot',ot_id=ot.id)}}">Informe de salida</a></div>
 <div class="pagehead"><div><h1>{{ot.numero}}</h1><p>{{ot.cliente}} · {{ot.equipo}} · {{ot.componente}}</p></div><span class="tag big">{{ot.estado}}</span></div>
 <section class="card ot-summary" aria-label="Resumen de orden de trabajo">
  <div class="tablewrap"><table class="ot-summary-table"><thead><tr><th>OT INGEPRO</th><th>Equipo / componente</th><th>Cliente</th><th>OT cliente</th><th>Cotización</th><th>Precio neto</th><th>Condición actual</th><th>Fecha envío</th><th>Enviado por</th><th>Entrega en faena</th></tr></thead>

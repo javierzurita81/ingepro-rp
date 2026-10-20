@@ -199,6 +199,38 @@ class DiagnosticoFoto(db.Model):
     creado=db.Column(db.DateTime,default=datetime.utcnow)
     hallazgo=db.relationship('DiagnosticoHallazgo',backref=db.backref('fotos_adicionales',cascade='all, delete-orphan',lazy=True,order_by='DiagnosticoFoto.id'))
 
+class SalidaHallazgo(db.Model):
+    id=db.Column(db.Integer, primary_key=True)
+    ot_id=db.Column(db.Integer, db.ForeignKey('ot.id'), nullable=False, index=True)
+    ot_componente_id=db.Column(db.Integer, db.ForeignKey('ot_componente.id'))
+    zona=db.Column(db.String(160))
+    condicion=db.Column(db.Text, nullable=False)
+    trabajo_recomendado=db.Column(db.Text)
+    observacion=db.Column(db.Text)
+    estado=db.Column(db.String(40), default='Pendiente')
+    foto_nombre=db.Column(db.String(180))
+    foto_mime=db.Column(db.String(60))
+    foto_datos=db.Column(db.LargeBinary)
+    creado=db.Column(db.DateTime, default=datetime.utcnow)
+    creado_por=db.Column(db.String(120))
+    componente=db.relationship('OTComponente')
+
+class SalidaMarca(db.Model):
+    __tablename__='salida_marca'
+    id=db.Column(db.Integer,primary_key=True)
+    hallazgo_id=db.Column(db.Integer,db.ForeignKey('salida_hallazgo.id'),unique=True,nullable=False)
+    marcas_json=db.Column(db.Text,default='[]')
+
+class SalidaFoto(db.Model):
+    __tablename__='salida_foto'
+    id=db.Column(db.Integer,primary_key=True)
+    hallazgo_id=db.Column(db.Integer,db.ForeignKey('salida_hallazgo.id'),nullable=False,index=True)
+    nombre=db.Column(db.String(180)); mime=db.Column(db.String(60)); datos=db.Column(db.LargeBinary,nullable=False)
+    marcas_json=db.Column(db.Text,default='[]')
+    creado=db.Column(db.DateTime,default=datetime.utcnow)
+    hallazgo=db.relationship('SalidaHallazgo',backref=db.backref('fotos_adicionales',cascade='all, delete-orphan',lazy=True,order_by='SalidaFoto.id'))
+
+
 class Cotizacion(db.Model):
     id=db.Column(db.Integer, primary_key=True)
     numero=db.Column(db.String(30), unique=True, nullable=False)
@@ -260,6 +292,7 @@ class OT(db.Model):
     observaciones_admin=db.Column(db.Text)
     modelo_equipo=db.relationship('ModeloEquipo')
     componentes_detalle=db.relationship('OTComponente', backref='ot', cascade='all, delete-orphan', lazy=True)
+    salidas=db.relationship('SalidaHallazgo', backref='ot', cascade='all, delete-orphan', lazy=True, order_by='SalidaHallazgo.id')
     hallazgos=db.relationship('DiagnosticoHallazgo', backref='ot', cascade='all, delete-orphan', lazy=True, order_by='DiagnosticoHallazgo.id')
     @property
     def avance(self):
@@ -277,9 +310,9 @@ def es_supervisor():
 # Todo endpoint nuevo queda BLOQUEADO por defecto hasta revisión.
 SUPERVISOR_GET={'index','control_general_ot','nueva_ot','ver_ot','diagnostico_ot',
     'diagnostico_foto','diagnostico_foto_adicional','diagnostico_pdf',
-    'diagnostico_editar','produccion','planificacion_gantt','planificacion_gantt_pdf',
+    'diagnostico_editar','salida_ot','salida_foto','salida_foto_adicional','salida_pdf','salida_editar','produccion','planificacion_gantt','planificacion_gantt_pdf',
     'componentes_modelo','oti_lista','oti_seleccionar','oti_editar','oti_pdf','logout','login','static'}
-SUPERVISOR_POST={'nueva_ot','diagnostico_ot','diagnostico_editar',
+SUPERVISOR_POST={'nueva_ot','diagnostico_ot','diagnostico_editar','salida_ot','salida_editar','salida_marcas','salida_foto_marcas','salida_foto_eliminar',
     'diagnostico_marcas','diagnostico_foto_marcas','diagnostico_foto_eliminar',
     'produccion_terminar','oti_nueva','oti_editar','api_gantt_rapido'}
 
@@ -767,7 +800,7 @@ def diagnostico_ot(ot_id):
         condicion=request.form.get('condicion','').strip()
         if not condicion:
             flash('Debes indicar la condición encontrada.'); return redirect(url_for('diagnostico_ot',ot_id=ot.id))
-        nombre,mime,datos=preparar_foto(request.files.get('foto_camara') or request.files.get('foto_archivo') or request.files.get('foto'))
+        nombre,mime,datos=preparar_foto(next((f for f in (request.files.get('foto_camara'),request.files.get('foto_archivo'),request.files.get('foto')) if f and f.filename), None))
         h=DiagnosticoHallazgo(ot_id=ot.id,ot_componente_id=comp.id if comp else None,zona=request.form.get('zona','').strip(),condicion=condicion,trabajo_recomendado=request.form.get('trabajo_recomendado','').strip(),observacion=request.form.get('observacion','').strip(),estado=request.form.get('estado','Pendiente'),foto_nombre=nombre,foto_mime=mime,foto_datos=datos,creado_por=usuario_actual().nombre)
         db.session.add(h); db.session.flush()
         for archivo in request.files.getlist('fotos_adicionales'):
@@ -1079,6 +1112,331 @@ def diagnostico_pdf(ot_id):
     buf.seek(0)
     audit('PDF diagnóstico generado',ot.numero)
     return send_file(buf,mimetype='application/pdf',as_attachment=True,download_name=f'Diagnostico-{ot.numero}.pdf')
+
+@app.route('/ot/<int:ot_id>/informe-salida', methods=['GET','POST'])
+@permiso_required('diagnostico')
+def salida_ot(ot_id):
+    ot=db.session.get(OT,ot_id) or abort(404)
+    if request.method=='POST':
+        comp_id=request.form.get('ot_componente_id')
+        comp=db.session.get(OTComponente,int(comp_id)) if comp_id else None
+        if not comp or comp.ot_id!=ot.id or (comp.condicion_ingreso or '').strip().casefold()!='recibido': flash('Solo puede registrar hallazgos de componentes efectivamente recibidos en esta OT.'); return redirect(url_for('salida_ot',ot_id=ot.id))
+        condicion=request.form.get('condicion','').strip()
+        if not condicion:
+            flash('Debes indicar la condición encontrada.'); return redirect(url_for('salida_ot',ot_id=ot.id))
+        nombre,mime,datos=preparar_foto(next((f for f in (request.files.get('foto_camara'),request.files.get('foto_archivo'),request.files.get('foto')) if f and f.filename), None))
+        h=SalidaHallazgo(ot_id=ot.id,ot_componente_id=comp.id if comp else None,zona=request.form.get('zona','').strip(),condicion=condicion,trabajo_recomendado=request.form.get('trabajo_recomendado','').strip(),observacion=request.form.get('observacion','').strip(),estado=request.form.get('estado','Pendiente'),foto_nombre=nombre,foto_mime=mime,foto_datos=datos,creado_por=usuario_actual().nombre)
+        db.session.add(h); db.session.flush()
+        for archivo in request.files.getlist('fotos_adicionales'):
+            n,m,d=preparar_foto(archivo)
+            if d: db.session.add(SalidaFoto(hallazgo_id=h.id,nombre=n,mime=m,datos=d))
+        db.session.commit(); audit('Hallazgo informe de salida creado',f'{ot.numero} / {comp.nombre if comp else "General"}')
+        flash('Hallazgo agregado al informe de salida.'); return redirect(url_for('salida_ot',ot_id=ot.id))
+    marcas_guardadas={m.hallazgo_id:json.loads(m.marcas_json or '[]') for m in SalidaMarca.query.filter(SalidaMarca.hallazgo_id.in_([h.id for h in ot.salidas])).all()} if ot.salidas else {}
+    return render_template('informe_salida.html',ot=ot,componentes_recibidos=[c for c in ot.componentes_detalle if (c.condicion_ingreso or '').strip().casefold()=='recibido'],marcas_guardadas=marcas_guardadas)
+
+@app.route('/informe-salida/hallazgo/<int:hid>/marcas',methods=['POST'])
+@permiso_required('diagnostico')
+def salida_marcas(hid):
+    h=db.session.get(SalidaHallazgo,hid) or abort(404)
+    if not h.foto_datos: return jsonify({'error':'Primero debe cargar una fotografía.'}),400
+    payload=request.get_json(silent=True) or {}
+    marcas=payload.get('marcas',[])
+    if not isinstance(marcas,list) or len(marcas)>100: return jsonify({'error':'Marcas inválidas'}),400
+    permitidos={'circle','arrow','square'}
+    for m in marcas:
+        if not isinstance(m,dict) or m.get('tipo') not in permitidos or m.get('color') not in ('#e53935','#e6a700','#1976d2') or not all(isinstance(m.get(k),(int,float)) and 0<=m[k]<=1 for k in ('x','y')):
+            return jsonify({'error':'Marcas inválidas'}),400
+    registro=SalidaMarca.query.filter_by(hallazgo_id=hid).first()
+    if not registro:
+        registro=SalidaMarca(hallazgo_id=hid);db.session.add(registro)
+    registro.marcas_json=json.dumps(marcas);db.session.commit()
+    audit('Anotaciones informe de salida guardadas',f'{h.ot.numero} / Hallazgo {hid}')
+    return jsonify({'ok':True})
+
+@app.route('/informe-salida/hallazgo/<int:hid>/foto')
+@login_required
+def salida_foto(hid):
+    h=db.session.get(SalidaHallazgo,hid) or abort(404)
+    if not h.foto_datos: abort(404)
+    return send_file(BytesIO(h.foto_datos),mimetype=h.foto_mime or 'image/jpeg',download_name=h.foto_nombre or f'hallazgo-{h.id}.jpg')
+
+@app.route('/informe-salida/foto/<int:foto_id>')
+@login_required
+def salida_foto_adicional(foto_id):
+    foto=db.session.get(SalidaFoto,foto_id) or abort(404)
+    return send_file(BytesIO(foto.datos),mimetype=foto.mime or 'image/jpeg',download_name=foto.nombre or f'foto-{foto.id}.jpg')
+
+@app.route('/informe-salida/foto/<int:foto_id>/marcas',methods=['POST'])
+@permiso_required('diagnostico')
+def salida_foto_marcas(foto_id):
+    foto=db.session.get(SalidaFoto,foto_id) or abort(404)
+    payload=request.get_json(silent=True) or {}
+    marcas=payload.get('marcas',[])
+    if not isinstance(marcas,list) or len(marcas)>100: return jsonify({'error':'Marcas inválidas'}),400
+    for m in marcas:
+        if not isinstance(m,dict) or m.get('tipo') not in ('circle','arrow','square') or m.get('color') not in ('#e53935','#e6a700','#1976d2') or not all(isinstance(m.get(k),(int,float)) and 0<=m[k]<=1 for k in ('x','y')): return jsonify({'error':'Marcas inválidas'}),400
+    foto.marcas_json=json.dumps(marcas);db.session.commit()
+    return jsonify({'ok':True})
+
+@app.route('/informe-salida/foto/<int:foto_id>/eliminar',methods=['POST'])
+@permiso_required('diagnostico')
+def salida_foto_eliminar(foto_id):
+    foto=db.session.get(SalidaFoto,foto_id) or abort(404)
+    ot_id=foto.hallazgo.ot_id
+    db.session.delete(foto);db.session.commit()
+    flash('Fotografía eliminada.');return redirect(url_for('salida_ot',ot_id=ot_id))
+
+@app.route('/informe-salida/hallazgo/<int:hid>/editar',methods=['GET','POST'])
+@permiso_required('diagnostico')
+def salida_editar(hid):
+    h=db.session.get(SalidaHallazgo,hid) or abort(404)
+    ot=h.ot
+    if request.method=='POST':
+        comp_id=request.form.get('ot_componente_id')
+        comp=db.session.get(OTComponente,int(comp_id)) if comp_id else None
+        if not comp or comp.ot_id!=ot.id or (comp.condicion_ingreso or '').strip().casefold()!='recibido': abort(400)
+        condicion=request.form.get('condicion','').strip()
+        if not condicion:
+            flash('Debes indicar la condición encontrada.'); return redirect(url_for('salida_editar',hid=h.id))
+        h.ot_componente_id=comp.id if comp else None
+        h.zona=request.form.get('zona','').strip(); h.condicion=condicion
+        h.trabajo_recomendado=request.form.get('trabajo_recomendado','').strip(); h.observacion=request.form.get('observacion','').strip(); h.estado=request.form.get('estado','Pendiente')
+        if request.files.get('foto') and request.files['foto'].filename:
+            nombre,mime,datos=preparar_foto(request.files.get('foto'))
+            if datos: h.foto_nombre=nombre; h.foto_mime=mime; h.foto_datos=datos
+        for archivo in request.files.getlist('fotos_adicionales'):
+            n,m,d=preparar_foto(archivo)
+            if d: db.session.add(SalidaFoto(hallazgo_id=h.id,nombre=n,mime=m,datos=d))
+        db.session.commit(); audit('Hallazgo informe de salida editado',f'{ot.numero} / Hallazgo {h.id}')
+        flash('Hallazgo actualizado.'); return redirect(url_for('salida_ot',ot_id=ot.id))
+    return render_template('salida_editar.html',ot=ot,h=h)
+
+@app.route('/informe-salida/hallazgo/<int:hid>/eliminar',methods=['POST'])
+@permiso_required('diagnostico')
+def salida_eliminar(hid):
+    h=db.session.get(SalidaHallazgo,hid) or abort(404); ot_id=h.ot_id; detalle=f'{h.ot.numero} / Hallazgo {h.id}'
+    SalidaMarca.query.filter_by(hallazgo_id=hid).delete()
+    db.session.delete(h); db.session.commit(); audit('Hallazgo informe de salida eliminado',detalle); flash('Hallazgo eliminado.')
+    return redirect(url_for('salida_ot',ot_id=ot_id))
+
+@app.route('/ot/<int:ot_id>/informe-salida/pdf')
+@permiso_required('diagnostico')
+def salida_pdf(ot_id):
+    """V7.40: informe A4 por OT, agrupado por componentes efectivamente recibidos."""
+    from html import escape
+    from collections import defaultdict
+    from reportlab.platypus import KeepTogether, CondPageBreak, HRFlowable
+    from reportlab.lib.enums import TA_CENTER
+
+    ot = db.session.get(OT, ot_id) or abort(404)
+    azul = colors.HexColor('#183e60')
+    texto = colors.HexColor('#2b4153')
+    suave = colors.HexColor('#e9eff5')
+    borde = colors.HexColor('#dce4eb')
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, rightMargin=34, leftMargin=34,
+                            topMargin=49, bottomMargin=44,
+                            title=f'Informe técnico de salida {ot.numero}', author='INGEPRO División Maestranza')
+    ancho = A4[0] - 68
+    estilos = {
+        'normal': ParagraphStyle('v740_normal', fontName='Helvetica', fontSize=8.3, leading=12, textColor=texto, spaceAfter=0),
+        'peque': ParagraphStyle('v740_peque', fontName='Helvetica', fontSize=7.4, leading=10.5, textColor=texto),
+        'etiqueta': ParagraphStyle('v740_etiqueta', fontName='Helvetica-Bold', fontSize=7.1, leading=10, textColor=azul),
+        'titulo': ParagraphStyle('v740_titulo', fontName='Helvetica-Bold', fontSize=12, leading=15, textColor=azul),
+        'hallazgo': ParagraphStyle('v740_hallazgo', fontName='Helvetica-Bold', fontSize=9.4, leading=13, textColor=azul),
+        'blanco': ParagraphStyle('v740_blanco', fontName='Helvetica-Bold', fontSize=10, leading=13, textColor=colors.white),
+        'pie_foto': ParagraphStyle('v740_piefoto', fontName='Helvetica', fontSize=7, leading=9, textColor=colors.HexColor('#65788b'), alignment=TA_CENTER),
+    }
+    def P(valor, estilo='normal'):
+        return Paragraph(escape(str(valor if valor is not None else '-')).replace('\n','<br/>'), estilos[estilo])
+    def seccion(nombre):
+        return [Spacer(1, 12), P(nombre,'titulo'), Spacer(1, 7)]
+    def tabla_estilo(t, fondo=None, pad=8):
+        reglas=[('VALIGN',(0,0),(-1,-1),'TOP'),('LEFTPADDING',(0,0),(-1,-1),pad),
+                ('RIGHTPADDING',(0,0),(-1,-1),pad),('TOPPADDING',(0,0),(-1,-1),pad),
+                ('BOTTOMPADDING',(0,0),(-1,-1),pad)]
+        if fondo: reglas.append(('BACKGROUND',(0,0),(-1,-1),fondo))
+        t.setStyle(TableStyle(reglas))
+        return t
+    def foto_marcada(datos, marcas):
+        try:
+            im=PILImage.open(BytesIO(datos))
+            im=ImageOps.exif_transpose(im).convert('RGB')
+            if marcas:
+                dibujo=ImageDraw.Draw(im)
+                w,h=im.size
+                for marca in marcas:
+                    try:
+                        x=int(float(marca.get('x',0))*w); y=int(float(marca.get('y',0))*h)
+                        r=max(12,int(w*.055)); grosor=max(3,int(w*.006))
+                        color=marca.get('color','#e03131')
+                        if not re.fullmatch(r'#[0-9a-fA-F]{6}',str(color)): color='#e03131'
+                        tipo=marca.get('tipo')
+                        if tipo=='circle': dibujo.ellipse((x-r,y-r,x+r,y+r),outline=color,width=grosor)
+                        elif tipo=='square': dibujo.rectangle((x-r,y-r,x+r,y+r),outline=color,width=grosor)
+                        elif tipo=='arrow':
+                            dibujo.line([(x-r,y+r),(x+r,y-r)],fill=color,width=grosor)
+                            dibujo.line([(x+r,y-r),(x,y-r//2)],fill=color,width=grosor)
+                            dibujo.line([(x+r,y-r),(x+r//2,y)],fill=color,width=grosor)
+                    except (TypeError,ValueError,KeyError): continue
+            # Redondeo sutil aplicado sobre los píxeles de la fotografía.
+            # Se conserva toda la imagen y su proporción; solo se suavizan las cuatro esquinas.
+            radio=max(2, round(min(im.size)*0.012))
+            mascara=PILImage.new('L',im.size,0)
+            ImageDraw.Draw(mascara).rounded_rectangle((0,0,im.width-1,im.height-1),radius=radio,fill=255)
+            rgba=im.convert('RGBA'); rgba.putalpha(mascara)
+            salida=BytesIO(); rgba.save(salida,format='PNG',optimize=True)
+            return salida.getvalue(),im.size
+        except Exception: return None,None
+    def imagen_con_pie(datos,marcas,numero):
+        datos_procesados,tamano=foto_marcada(datos,marcas)
+        if not datos_procesados: return None
+        w,h=tamano
+        # La fotografía ocupa como máximo el ancho útil de su columna,
+        # sin recortar, deformar ni alterar su relación ancho/alto.
+        columna_foto=ancho*.45
+        limite_ancho=columna_foto-14
+        limite_alto=210
+        escala=min(limite_ancho/w,limite_alto/h)
+        img=Image(BytesIO(datos_procesados),width=w*escala,height=h*escala)
+        img.hAlign='CENTER'
+        pie=P(f'Figura {numero:02d} · Registro fotográfico','pie_foto')
+        # Celda interna de ancho completo: centra fotos verticales y horizontales.
+        centrado=Table([[img],[pie]],colWidths=[columna_foto-7])
+        centrado.setStyle(TableStyle([
+            ('ALIGN',(0,0),(-1,-1),'CENTER'),
+            ('VALIGN',(0,0),(-1,-1),'TOP'),
+            ('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),0),
+            ('TOPPADDING',(0,0),(-1,-1),0),('BOTTOMPADDING',(0,0),(0,0),5),
+            ('BOTTOMPADDING',(0,1),(0,1),0)
+        ]))
+        return centrado
+    def pie_pagina(canvas, documento):
+        canvas.saveState(); w,h=A4
+        canvas.setStrokeColor(borde);canvas.line(34,35,w-34,35)
+        canvas.setFont('Helvetica',7);canvas.setFillColor(colors.HexColor('#738395'))
+        canvas.drawString(34,24,'INGEPRO · DIVISIÓN MAESTRANZA · Documento técnico')
+        canvas.drawRightString(w-34,24,f'OT {ot.numero} · Página {documento.page}')
+        if documento.page>1:
+            canvas.setFont('Helvetica-Bold',8);canvas.setFillColor(azul)
+            canvas.drawString(34,h-29,'INGEPRO  |  INFORME DE INFORME TÉCNICO DE SALIDA')
+            canvas.setStrokeColor(azul);canvas.line(34,h-35,w-34,h-35)
+        canvas.restoreState()
+
+    story=[]
+    logo_path=os.path.join(app.root_path,'static','img','logo-ingepro.png')
+    if os.path.exists(logo_path):
+        try:
+            with PILImage.open(logo_path) as im: lw,lh=im.size
+            factor=min(138/lw,53/lh)
+            logo=Image(logo_path,width=lw*factor,height=lh*factor)
+        except Exception: logo=P('INGEPRO','titulo')
+    else: logo=P('INGEPRO','titulo')
+    cabecera=Table([[logo,Paragraph('<b>INFORME DE INFORME TÉCNICO DE SALIDA</b><br/>'+
+                     escape(ot.numero)+' · Rev. 00<br/>'+datetime.now().strftime('%d/%m/%Y'),
+                     ParagraphStyle('v740_head',fontName='Helvetica',fontSize=9,leading=14,textColor=azul,alignment=TA_RIGHT))]],
+                   colWidths=[ancho*.33,ancho*.67])
+    cabecera.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'MIDDLE'),('BOTTOMPADDING',(0,0),(-1,-1),12),
+                                  ('LINEBELOW',(0,0),(-1,-1),3,azul)]))
+    story.extend([cabecera,Spacer(1,13)])
+    recibidos=[c for c in ot.componentes_detalle if (c.condicion_ingreso or '').strip().casefold()=='recibido']
+    ids_recibidos={c.id for c in recibidos}
+    hallazgos=[h for h in ot.salidas if h.ot_componente_id in ids_recibidos]
+    agrupados=defaultdict(list)
+    for h in hallazgos: agrupados[h.ot_componente_id].append(h)
+    story.extend(seccion('01. Antecedentes generales'))
+    campos=[('Cliente',ot.cliente),('OT INGEPRO',ot.numero),('Equipo',ot.equipo),
+            ('Serie / Tag',ot.serie or '-'),('Guía de ingreso',ot.guia or '-'),
+            ('Componentes recibidos',str(len(recibidos))),('Hallazgos registrados',str(len(hallazgos))),
+            ('Fecha de emisión',datetime.now().strftime('%d/%m/%Y'))]
+    celdas=[]
+    for i in range(0,len(campos),2):
+        fila=[]
+        for etiqueta,valor in campos[i:i+2]:
+            fila.append([P(etiqueta,'etiqueta'),Spacer(1,3),P(valor,'normal')])
+        celdas.append(fila)
+    meta=Table(celdas,colWidths=[ancho/2]*2,cornerRadii=[9,9,9,9]);tabla_estilo(meta,colors.HexColor('#f0f4f8'),9)
+    story.append(meta)
+    story.extend(seccion('02. Objetivo del informe de salida'))
+    story.append(P('Documentar las condiciones identificadas durante la inspección de los componentes efectivamente recibidos en maestranza, con evidencia fotográfica, observaciones técnicas y recomendaciones de reparación.'))
+    if False:
+        story.extend(seccion('Resumen general registrado en OT'))
+        story.append(P(''))
+    story.extend(seccion('03. Informe de salida por componente'))
+    if not recibidos: story.append(P('No existen componentes registrados como recibidos en esta OT.'))
+    contador_fotos=0
+    for indice,comp in enumerate(recibidos,1):
+        lista=agrupados.get(comp.id,[])
+        encabezado=Table([[P(f'COMPONENTE {indice:02d} · {comp.nombre.upper()}','blanco')],
+                           [Paragraph(escape(f'Código: {comp.codigo or "-"}  ·  {len(lista)} hallazgo(s)'),
+                            ParagraphStyle(f'v740_comp_{indice}',fontName='Helvetica',fontSize=7.5,leading=11,textColor=colors.HexColor('#d6e4ee')))]],
+                         colWidths=[ancho],cornerRadii=[7,7,7,7])
+        tabla_estilo(encabezado,azul,7)
+        story.extend([CondPageBreak(100),Spacer(1,10),encabezado,Spacer(1,8)])
+        if not lista:
+            story.append(P('Componente recibido sin hallazgos registrados.'))
+            continue
+        for numero,hallazgo in enumerate(lista,1):
+            fotos=[]
+            if hallazgo.foto_datos:
+                registro=SalidaMarca.query.filter_by(hallazgo_id=hallazgo.id).first()
+                try: marcas=json.loads(registro.marcas_json or '[]') if registro else []
+                except (ValueError,TypeError): marcas=[]
+                fotos.append((hallazgo.foto_datos,marcas))
+            for foto in hallazgo.fotos_adicionales:
+                try: marcas=json.loads(foto.marcas_json or '[]')
+                except (ValueError,TypeError): marcas=[]
+                fotos.append((foto.datos,marcas))
+            comentario=[P('CONDICIÓN ENCONTRADA','etiqueta'),Spacer(1,3),P(hallazgo.condicion),Spacer(1,8),
+                        HRFlowable(width='100%',thickness=.5,color=colors.HexColor('#cad8e4')),Spacer(1,7),
+                        P('TRABAJO RECOMENDADO','etiqueta'),Spacer(1,3),P(hallazgo.trabajo_recomendado or '-'),Spacer(1,8),
+                        HRFlowable(width='100%',thickness=.5,color=colors.HexColor('#cad8e4')),Spacer(1,7),
+                        P('COMENTARIO TÉCNICO','etiqueta'),Spacer(1,3),P(hallazgo.observacion or '-')]
+            panel=Table([[comentario]],colWidths=[ancho*.55-16],cornerRadii=[9,9,9,9]);tabla_estilo(panel,suave,9)
+            titulo=P(f'Hallazgo {numero:02d} · {hallazgo.zona or "Inspección técnica"}','hallazgo')
+            if not fotos:
+                izquierda=[P('Sin fotografía registrada','peque')]
+                fila=Table([[izquierda,panel]],colWidths=[ancho*.45,ancho*.55])
+                fila.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'TOP'),('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),7)]))
+                story.append(KeepTogether([titulo,Spacer(1,6),fila,Spacer(1,12)]))
+            else:
+                for foto_indice,(datos,marcas) in enumerate(fotos):
+                    contador_fotos+=1
+                    izquierda=imagen_con_pie(datos,marcas,contador_fotos) or P('Fotografía no disponible','peque')
+                    derecha=panel if foto_indice==0 else P(f'Continuación del hallazgo {numero:02d} · Evidencia fotográfica adicional','peque')
+                    fila=Table([[izquierda,derecha]],colWidths=[ancho*.45,ancho*.55])
+                    fila.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'TOP'),('LEFTPADDING',(0,0),(-1,-1),0),
+                                              ('RIGHTPADDING',(0,0),(-1,-1),7),('TOPPADDING',(0,0),(-1,-1),4),
+                                              ('BOTTOMPADDING',(0,0),(-1,-1),4)]))
+                    bloque=[titulo if foto_indice==0 else P(f'Hallazgo {numero:02d} · Fotografía adicional','hallazgo'),Spacer(1,6),fila,Spacer(1,10)]
+                    # Mantener fotografía y comentario juntos en la misma página.
+                    story.append(KeepTogether(bloque))
+    story.extend(seccion('04. Resumen consolidado del informe de salida'))
+    resumen=[[P('COMPONENTE','etiqueta'),P('HALLAZGOS','etiqueta'),P('ESTADO','etiqueta')]]
+    for c in recibidos:
+        hs=agrupados.get(c.id,[])
+        resumen.append([P(c.nombre,'peque'),P(str(len(hs)),'peque'),P(', '.join(sorted({h.estado or 'Pendiente' for h in hs})) if hs else 'Sin hallazgos','peque')])
+    t=Table(resumen,colWidths=[ancho*.48,ancho*.18,ancho*.34],repeatRows=1,cornerRadii=[7,7,7,7]);tabla_estilo(t,None,7)
+    t.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),suave),('LINEBELOW',(0,0),(-1,-1),.5,borde)]));story.append(t)
+    story.extend(seccion('05. Conclusión general de la OT'))
+    # La conclusión se toma de la OT, no se inventa una evaluación automática.
+    conclusion='Informe de salida en preparación. Validar las observaciones y firmas antes de emitirlo como definitivo.'
+    t=Table([[[P('EVALUACIÓN TÉCNICA CONSOLIDADA','etiqueta'),Spacer(1,5),P(conclusion)]]],
+            colWidths=[ancho],cornerRadii=[9,9,9,9]);tabla_estilo(t,suave,10);story.append(t)
+    story.extend(seccion('06. Responsables del informe'))
+    firmas=Table([[[P('ELABORADO POR','etiqueta'),Spacer(1,28),HRFlowable(width='95%',thickness=.6,color=borde),
+                     Spacer(1,5),P('Técnico responsable · Nombre / Firma / Fecha','peque')],
+                   [P('REVISADO POR','etiqueta'),Spacer(1,28),HRFlowable(width='95%',thickness=.6,color=borde),
+                     Spacer(1,5),P('Área de Ingeniería · Nombre / Firma / Fecha','peque')]]],
+                 colWidths=[ancho/2]*2,cornerRadii=[9,9,9,9]);tabla_estilo(firmas,colors.HexColor('#f0f4f8'),10)
+    story.append(firmas)
+    story.extend([Spacer(1,12),P('Este documento registra las observaciones finales consignadas por el personal técnico. La conformidad y el despacho se gestionan por separado.','peque')])
+    doc.build(story,onFirstPage=pie_pagina,onLaterPages=pie_pagina)
+    buf.seek(0)
+    audit('PDF informe de salida generado',ot.numero)
+    return send_file(buf,mimetype='application/pdf',as_attachment=True,download_name=f'Informe-Salida-{ot.numero}.pdf')
+
 
 @app.route('/clientes')
 @permiso_required('clientes')
@@ -1933,6 +2291,7 @@ def cotizacion_pdf(qid):
 def tablas_limpieza():
     return (LineaCotizacion, Cotizacion, PlanLiberacion, ProduccionEtapa,
             OTInterna, PlanNoAplica, PlanActividad, OTReparacionSeleccionada,
+            SalidaFoto, SalidaMarca, SalidaHallazgo,
             DiagnosticoFoto, DiagnosticoMarca, DiagnosticoHallazgo,
             OTComponente, OT)
 

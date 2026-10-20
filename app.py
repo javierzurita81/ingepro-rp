@@ -6,6 +6,7 @@ from flask import Flask, render_template, request, redirect, url_for, flash, jso
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
 from io import BytesIO
+from xml.sax.saxutils import escape as xml_escape
 from PIL import Image as PILImage, ImageOps, ImageDraw
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
@@ -79,6 +80,25 @@ class ReparacionMaestra(db.Model):
     secuencia=db.Column(db.Integer, default=0)
     activo=db.Column(db.Boolean, default=True)
     componente_modelo=db.relationship('ComponenteModelo', backref=db.backref('reparaciones', cascade='all, delete-orphan', lazy=True))
+
+class BosquejoComponente(db.Model):
+    id=db.Column(db.Integer,primary_key=True)
+    componente_modelo_id=db.Column(db.Integer,db.ForeignKey('componente_modelo.id'),nullable=False,index=True)
+    nombre=db.Column(db.String(120),nullable=False)
+    imagen=db.Column(db.LargeBinary,nullable=False)
+    mime=db.Column(db.String(40),default='image/png')
+    creado=db.Column(db.DateTime,default=datetime.utcnow)
+    componente=db.relationship('ComponenteModelo',backref=db.backref('bosquejos',cascade='all, delete-orphan',lazy=True))
+
+class ChecklistEjecucion(db.Model):
+    id=db.Column(db.Integer,primary_key=True)
+    ot_id=db.Column(db.Integer,db.ForeignKey('ot.id'),nullable=False,index=True)
+    ot_componente_id=db.Column(db.Integer,db.ForeignKey('ot_componente.id'),nullable=False,index=True)
+    reparacion_maestra_id=db.Column(db.Integer,db.ForeignKey('reparacion_maestra.id'),nullable=False)
+    estado=db.Column(db.String(15),nullable=False,default='pendiente')
+    usuario_id=db.Column(db.Integer,db.ForeignKey('usuario.id'))
+    fecha=db.Column(db.DateTime)
+    __table_args__=(db.UniqueConstraint('ot_componente_id','reparacion_maestra_id',name='uq_check_ejecucion'),)
 
 class OTReparacionSeleccionada(db.Model):
     id=db.Column(db.Integer,primary_key=True)
@@ -311,10 +331,10 @@ def es_supervisor():
 SUPERVISOR_GET={'index','control_general_ot','nueva_ot','ver_ot','diagnostico_ot',
     'diagnostico_foto','diagnostico_foto_adicional','diagnostico_pdf',
     'diagnostico_editar','salida_ot','salida_foto','salida_foto_adicional','salida_pdf','salida_editar','produccion','planificacion_gantt','planificacion_gantt_pdf',
-    'componentes_modelo','oti_lista','oti_seleccionar','oti_editar','oti_pdf','logout','login','static'}
+    'componentes_modelo','oti_lista','oti_seleccionar','oti_editar','oti_pdf','checklist_lista','checklist_componente','checklist_pdf','bosquejo_ver','logout','login','static'}
 SUPERVISOR_POST={'nueva_ot','diagnostico_ot','diagnostico_editar','salida_ot','salida_editar','salida_marcas','salida_foto_marcas','salida_foto_eliminar',
     'diagnostico_marcas','diagnostico_foto_marcas','diagnostico_foto_eliminar',
-    'produccion_terminar','oti_nueva','oti_editar','api_gantt_rapido'}
+    'checklist_componente','produccion_terminar','oti_nueva','oti_editar','api_gantt_rapido'}
 
 @app.before_request
 def supervisores_rutas_seguras():
@@ -1566,6 +1586,119 @@ def eliminar_componente(cid):
         db.session.delete(c); db.session.commit(); audit('Componente eliminado',str(cid)); flash('Componente eliminado.')
     return redirect(url_for('maestro_modelo',mid=mid))
 
+@app.route('/maestros/componentes/<int:cid>/bosquejos',methods=['POST'])
+@permiso_required('maestros')
+def bosquejo_subir(cid):
+    c=db.session.get(ComponenteModelo,cid) or abort(404)
+    f=request.files.get('imagen')
+    if not f or not f.filename:
+        flash('Seleccione un bosquejo JPG, PNG o WEBP.'); return redirect(url_for('maestro_reparaciones',cid=cid))
+    raw=f.read(6*1024*1024+1)
+    if len(raw)>6*1024*1024: flash('Imagen demasiado grande (máximo 6 MB).'); return redirect(url_for('maestro_reparaciones',cid=cid))
+    try:
+        im=PILImage.open(BytesIO(raw)); im.verify()
+        im=PILImage.open(BytesIO(raw)); im.load()
+        if im.format not in ('PNG','JPEG','WEBP') or im.width*im.height>24000000: raise ValueError()
+        im.thumbnail((2400,2400)); buf=BytesIO(); im.convert('RGB').save(buf,format='JPEG',quality=88)
+    except Exception:
+        flash('Archivo no válido. Use JPG, PNG o WEBP.'); return redirect(url_for('maestro_reparaciones',cid=cid))
+    nombre=(request.form.get('nombre') or 'Bosquejo técnico').strip()[:120]
+    db.session.add(BosquejoComponente(componente_modelo_id=cid,nombre=nombre,imagen=buf.getvalue(),mime='image/jpeg'))
+    db.session.commit(); flash('Bosquejo guardado en el Maestro.'); return redirect(url_for('maestro_reparaciones',cid=cid))
+
+@app.route('/maestros/bosquejos/<int:bid>')
+@login_required
+def bosquejo_ver(bid):
+    b=db.session.get(BosquejoComponente,bid) or abort(404)
+    if not (usuario_actual().puede('maestros') or usuario_actual().puede('produccion') or usuario_actual().puede('diagnostico')): abort(403)
+    response=send_file(BytesIO(b.imagen),mimetype=b.mime,download_name='bosquejo.jpg')
+    response.headers['Cache-Control']='private, max-age=300'
+    return response
+
+@app.route('/maestros/bosquejos/<int:bid>/eliminar',methods=['POST'])
+@permiso_required('maestros')
+def bosquejo_eliminar(bid):
+    b=db.session.get(BosquejoComponente,bid) or abort(404)
+    cid=b.componente_modelo_id; db.session.delete(b); db.session.commit()
+    flash('Bosquejo eliminado.'); return redirect(url_for('maestro_reparaciones',cid=cid))
+
+@app.route('/checklist-ejecucion')
+@login_required
+def checklist_lista():
+    if not (usuario_actual().puede('produccion') or usuario_actual().puede('diagnostico')): abort(403)
+    ots=OT.query.order_by(OT.id.desc()).limit(150).all()
+    return render_template('checklist_lista.html',ots=ots)
+
+def checklist_tareas(ot,comp):
+    if comp.ot_id!=ot.id or comp.condicion_ingreso!='Recibido': abort(404)
+    seleccion=OTReparacionSeleccionada.query.filter_by(ot_id=ot.id,ot_componente_id=comp.id).all()
+    ids=[x.reparacion_maestra_id for x in seleccion]
+    if not ids: return []
+    reps=ReparacionMaestra.query.filter(ReparacionMaestra.id.in_(ids),ReparacionMaestra.componente_modelo_id==comp.componente_modelo_id).order_by(ReparacionMaestra.secuencia,ReparacionMaestra.id).all()
+    estados={x.reparacion_maestra_id:x for x in ChecklistEjecucion.query.filter_by(ot_componente_id=comp.id,ot_id=ot.id).all()}
+    return [(r,estados.get(r.id)) for r in reps]
+
+@app.route('/ot/<int:ot_id>/checklist/<int:cid>',methods=['GET','POST'])
+@login_required
+def checklist_componente(ot_id,cid):
+    u=usuario_actual()
+    if not (u.puede('produccion') or u.puede('diagnostico')): abort(403)
+    ot=db.session.get(OT,ot_id) or abort(404)
+    comp=OTComponente.query.filter_by(id=cid,ot_id=ot_id).first_or_404()
+    tareas=checklist_tareas(ot,comp)
+    if request.method=='POST':
+        if not (u.es_admin or es_supervisor() or u.puede('produccion')): abort(403)
+        if request.form.get('token')!=session.get('checklist_token'): abort(400)
+        for r,reg in tareas:
+            estado=request.form.get('estado_'+str(r.id),'pendiente')
+            if estado not in ('pendiente','realizado','no_aplica'): abort(400)
+            if reg is None:
+                reg=ChecklistEjecucion(ot_id=ot.id,ot_componente_id=comp.id,reparacion_maestra_id=r.id)
+                db.session.add(reg)
+            if reg.estado!=estado:
+                reg.estado=estado; reg.usuario_id=u.id; reg.fecha=datetime.utcnow()
+        db.session.commit(); flash('Checklist guardado.'); return redirect(url_for('checklist_componente',ot_id=ot_id,cid=cid))
+    session['checklist_token']=secrets.token_urlsafe(24)
+    bosquejos=BosquejoComponente.query.filter_by(componente_modelo_id=comp.componente_modelo_id).order_by(BosquejoComponente.id).all() if comp.componente_modelo_id else []
+    return render_template('checklist_ejecucion.html',ot=ot,comp=comp,tareas=tareas,bosquejos=bosquejos,token=session['checklist_token'])
+
+@app.route('/ot/<int:ot_id>/checklist/<int:cid>/pdf')
+@login_required
+def checklist_pdf(ot_id,cid):
+    if not (usuario_actual().puede('produccion') or usuario_actual().puede('diagnostico')): abort(403)
+    ot=db.session.get(OT,ot_id) or abort(404)
+    comp=OTComponente.query.filter_by(id=cid,ot_id=ot_id).first_or_404()
+    tareas=[(r,e) for r,e in checklist_tareas(ot,comp) if not e or e.estado!='no_aplica']
+    buf=BytesIO(); doc=SimpleDocTemplate(buf,pagesize=A4,rightMargin=35,leftMargin=35,topMargin=32,bottomMargin=32)
+    styles=getSampleStyleSheet(); story=[]
+    story.append(Paragraph('<font color="#12577D"><b>INGEPRO · DIVISIÓN MAESTRANZA</b></font>',styles['Heading2']))
+    story.append(Paragraph('<b>CHECKLIST DE EJECUCIÓN</b>',styles['Heading3']))
+    for label,val in [('OT INGEPRO',ot.numero),('Equipo',ot.equipo),('Componente',comp.nombre),('Código',comp.codigo or '-')]:
+        story.append(Paragraph(f'<b>{label}:</b> {xml_escape(str(val or "-"))}',styles['Normal']))
+    story.append(Spacer(1,12))
+    bosquejos=BosquejoComponente.query.filter_by(componente_modelo_id=comp.componente_modelo_id).order_by(BosquejoComponente.id).all() if comp.componente_modelo_id else []
+    if bosquejos:
+        story.append(Paragraph('<b>BOSQUEJO TÉCNICO</b>',styles['Heading4']))
+        for b in bosquejos[:2]:
+            try:
+                im=PILImage.open(BytesIO(b.imagen)); w,h=im.size; scale=min(490/w,185/h,1)
+                story.append(Image(BytesIO(b.imagen),width=w*scale,height=h*scale)); story.append(Paragraph(xml_escape(b.nombre),styles['Normal']))
+            except Exception: pass
+        story.append(Spacer(1,10))
+    story.append(Paragraph('<b>TRABAJOS APLICABLES</b>',styles['Heading4']))
+    rows=[['N°','TAREA DE REPARACIÓN','CHECK']]
+    for i,(r,e) in enumerate(tareas,1): rows.append([str(i),Paragraph(xml_escape(r.nombre),styles['Normal']),'[X]' if e and e.estado=='realizado' else '[ ]'])
+    if len(rows)==1: rows.append(['','Sin tareas aplicables',''])
+    t=Table(rows,colWidths=[34,445,45],repeatRows=1,hAlign='LEFT'); t.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),colors.HexColor('#E6EFF5')),('GRID',(0,0),(-1,-1),.45,colors.HexColor('#B4C1CD')),('VALIGN',(0,0),(-1,-1),'MIDDLE'),('FONTSIZE',(0,0),(-1,-1),9),('BOTTOMPADDING',(0,0),(-1,-1),7),('TOPPADDING',(0,0),(-1,-1),7),('ALIGN',(-1,0),(-1,-1),'CENTER')]))
+    story.append(t); story.append(Spacer(1,20))
+    cambios=[e for _,e in tareas if e and e.fecha]
+    ultimo=max(cambios,key=lambda e:e.fecha) if cambios else None
+    responsable=db.session.get(Usuario,ultimo.usuario_id).nombre if ultimo and ultimo.usuario_id and db.session.get(Usuario,ultimo.usuario_id) else 'Sin registrar'
+    story.append(Paragraph('<b>Supervisor / última verificación:</b> '+xml_escape(responsable),styles['Normal']))
+    story.append(Paragraph('<b>Fecha:</b> '+(ultimo.fecha.strftime('%d-%m-%Y %H:%M') if ultimo else 'Pendiente'),styles['Normal']))
+    doc.build(story); buf.seek(0)
+    return send_file(buf,mimetype='application/pdf',as_attachment=True,download_name=f'Checklist_OT_{ot.numero}_Componente_{cid}.pdf')
+
 @app.route('/maestros/componentes/<int:cid>/reparaciones',methods=['GET','POST'])
 @permiso_required('maestros')
 def maestro_reparaciones(cid):
@@ -2303,7 +2436,7 @@ def cotizacion_pdf(qid):
 # Nunca eliminar usuarios, clientes, modelos, componentes maestros ni reparaciones maestras.
 # OTInterna se define más abajo en este archivo; se resuelve en tiempo de ejecución.
 def tablas_limpieza():
-    return (LineaCotizacion, Cotizacion, PlanLiberacion, ProduccionEtapa,
+    return (LineaCotizacion, Cotizacion, PlanLiberacion, ProduccionEtapa, ChecklistEjecucion,
             OTInterna, PlanNoAplica, PlanActividad, OTReparacionSeleccionada,
             SalidaFoto, SalidaMarca, SalidaHallazgo,
             DiagnosticoFoto, DiagnosticoMarca, DiagnosticoHallazgo,

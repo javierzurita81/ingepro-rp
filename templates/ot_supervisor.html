@@ -1,0 +1,9 @@
+{% extends 'base.html' %}{% block c %}
+<section class="card"><h1>OT {{ot.numero}} · Vista técnica</h1>
+<p><b>Equipo:</b> {{ot.equipo}}</p><p><b>Cliente:</b> {{ot.cliente}}</p>
+<p><b>Serie:</b> {{ot.serie or '—'}}</p><p><b>Guía:</b> {{ot.guia or '—'}}</p>
+<h2>Componentes</h2><div class="tablewrap"><table><thead><tr><th>Componente</th><th>Código</th><th>Recepción</th><th>Material</th></tr></thead><tbody>
+{% for c in ot.componentes_detalle %}<tr><td>{{c.nombre}}</td><td>{{c.codigo or '—'}}</td><td>{{c.condicion_ingreso or '—'}}</td><td>{{c.material or '—'}}</td></tr>{% endfor %}
+</tbody></table></div><p><a class="btn primary" href="{{url_for('diagnostico_ot',ot_id=ot.id)}}">Abrir / crear diagnóstico</a>
+<a class="btn secondary" href="{{url_for('control_general_ot')}}">Volver a OT</a></p></section>
+{% endblock %}

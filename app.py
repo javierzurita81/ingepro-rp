@@ -56,11 +56,13 @@ class Usuario(db.Model):
     @property
     def permisos(self):
         if self.es_admin: return list(PERMISOS.keys())
+        if (self.rol or '').strip().casefold()=='supervisor de producción': return ['ingreso','diagnostico','planificacion','produccion']
         try: return json.loads(self.permisos_json or '[]')
         except: return []
     def puede(self,p):
         # Compatibilidad con permisos de versiones anteriores.
         if self.es_admin: return True
+        if (self.rol or '').strip().casefold()=='supervisor de producción': return p in ('ingreso','diagnostico','planificacion','produccion')
         permisos=set(self.permisos)
         aliases={'usuarios':{'administracion'}, 'clientes':{'maestros'}}
         return p in permisos or bool(aliases.get(p,set()) & permisos)
@@ -256,8 +258,32 @@ class OT(db.Model):
         except:return 10
 
 def usuario_actual(): return db.session.get(Usuario, session.get('user_id')) if session.get('user_id') else None
+
+def es_supervisor():
+    u=usuario_actual()
+    return bool(u and not u.es_admin and (u.rol or '').strip().casefold()=='supervisor de producción')
+
+# Seguridad del servidor: listado explícito de rutas permitidas para supervisión.
+# Todo endpoint nuevo queda BLOQUEADO por defecto hasta revisión.
+SUPERVISOR_GET={'index','control_general_ot','nueva_ot','ver_ot','diagnostico_ot',
+    'diagnostico_foto','diagnostico_foto_adicional','diagnostico_pdf',
+    'diagnostico_editar','produccion','planificacion_gantt','planificacion_gantt_pdf',
+    'componentes_modelo','logout','login','static'}
+SUPERVISOR_POST={'nueva_ot','diagnostico_ot','diagnostico_editar',
+    'diagnostico_marcas','diagnostico_foto_marcas','diagnostico_foto_eliminar',
+    'produccion_terminar'}
+
+@app.before_request
+def supervisores_rutas_seguras():
+    if not es_supervisor(): return
+    endpoint=request.endpoint or ''
+    permitidos=SUPERVISOR_GET if request.method in ('GET','HEAD') else SUPERVISOR_POST
+    if endpoint not in permitidos: abort(403)
+    # La OT es de solo lectura; la recepción se realiza mediante Nueva OT.
+    if endpoint=='ver_ot' and request.method!='GET': abort(403)
+
 @app.context_processor
-def inject_user(): return dict(usuario_actual=usuario_actual(), PERMISOS=PERMISOS, cotizacion_activa_ot=lambda ot_id: Cotizacion.query.filter(Cotizacion.ot_id==ot_id, Cotizacion.estado!='Anulada').order_by(Cotizacion.id.desc()).first())
+def inject_user(): return dict(usuario_actual=usuario_actual(), es_supervisor=es_supervisor(), PERMISOS=PERMISOS, cotizacion_activa_ot=lambda ot_id: Cotizacion.query.filter(Cotizacion.ot_id==ot_id, Cotizacion.estado!='Anulada').order_by(Cotizacion.id.desc()).first())
 
 def login_required(fn):
     @wraps(fn)
@@ -447,12 +473,16 @@ def listado_control_ot():
 @login_required
 def index():
     filas=listado_control_ot()
+    if es_supervisor():
+        for f in filas: f['precio']=None; f['cot']=None
     return render_template('index.html',filas=filas,buscar=request.args.get('buscar',''),filtro=request.args.get('estado',''))
 
 @app.route('/ot')
 @login_required
 def control_general_ot():
     filas=listado_control_ot()
+    if es_supervisor():
+        for f in filas: f['precio']=None; f['cot']=None
     return render_template('index.html',filas=filas,buscar=request.args.get('buscar',''),filtro=request.args.get('estado',''),solo_ot=True)
 
 @app.route('/ot/exportar-excel')
@@ -487,7 +517,7 @@ def usuario_nuevo():
         sigla=request.form.get('sigla','').strip().upper() or None; color=request.form.get('color','').strip() or None
         if sigla and Usuario.query.filter_by(sigla=sigla).first(): flash('La sigla ya está asignada a otro usuario.'); return render_template('usuario_form.html',permisos=PERMISOS,usuario=None)
         if color and Usuario.query.filter_by(color=color).first(): flash('El color ya está asignado a otro usuario.'); return render_template('usuario_form.html',permisos=PERMISOS,usuario=None)
-        u=Usuario(username=username,nombre=request.form['nombre'].strip(),cargo=request.form.get('cargo','').strip(),rut=request.form.get('rut','').strip(),email=request.form.get('email','').strip(),sigla=sigla,color=color,rol=request.form.get('rol','Usuario'),permisos_json=json.dumps(request.form.getlist('permisos')),disponible_planificacion=('disponible_planificacion' in request.form)); u.set_password(request.form['password'])
+        u=Usuario(username=username,nombre=request.form['nombre'].strip(),cargo=request.form.get('cargo','').strip(),rut=request.form.get('rut','').strip(),email=request.form.get('email','').strip(),sigla=sigla,color=color,rol=request.form.get('rol','Usuario'),permisos_json=json.dumps(['ingreso','diagnostico','planificacion','produccion'] if request.form.get('rol')=='Supervisor de Producción' else request.form.getlist('permisos')),disponible_planificacion=('disponible_planificacion' in request.form)); u.set_password(request.form['password'])
         db.session.add(u); db.session.commit(); audit('Usuario creado',u.username); flash('Usuario creado correctamente.'); return redirect(url_for('usuarios'))
     return render_template('usuario_form.html',permisos=PERMISOS,usuario=None)
 
@@ -499,7 +529,7 @@ def usuario_editar(uid):
         sigla=request.form.get('sigla','').strip().upper() or None; color=request.form.get('color','').strip() or None
         if sigla and Usuario.query.filter(Usuario.sigla==sigla,Usuario.id!=u.id).first(): flash('La sigla ya está asignada a otro usuario.'); return render_template('usuario_form.html',permisos=PERMISOS,usuario=u)
         if color and Usuario.query.filter(Usuario.color==color,Usuario.id!=u.id).first(): flash('El color ya está asignado a otro usuario.'); return render_template('usuario_form.html',permisos=PERMISOS,usuario=u)
-        u.nombre=request.form['nombre'].strip(); u.cargo=request.form.get('cargo','').strip(); u.rut=request.form.get('rut','').strip(); u.email=request.form.get('email','').strip(); u.sigla=sigla; u.color=color; u.rol=request.form.get('rol','Usuario'); u.permisos_json=json.dumps(request.form.getlist('permisos')); u.disponible_planificacion=('disponible_planificacion' in request.form)
+        u.nombre=request.form['nombre'].strip(); u.cargo=request.form.get('cargo','').strip(); u.rut=request.form.get('rut','').strip(); u.email=request.form.get('email','').strip(); u.sigla=sigla; u.color=color; u.rol=request.form.get('rol','Usuario'); u.permisos_json=json.dumps(['ingreso','diagnostico','planificacion','produccion'] if request.form.get('rol')=='Supervisor de Producción' else request.form.getlist('permisos')); u.disponible_planificacion=('disponible_planificacion' in request.form)
         if request.form.get('password'): u.set_password(request.form['password'])
         db.session.commit(); audit('Usuario modificado',u.username); flash('Usuario actualizado.'); return redirect(url_for('usuarios'))
     return render_template('usuario_form.html',permisos=PERMISOS,usuario=u)
@@ -628,6 +658,7 @@ def seguimiento_ot(ot):
 @login_required
 def ver_ot(ot_id):
     ot=db.session.get(OT,ot_id) or abort(404)
+    if es_supervisor(): return render_template('ot_supervisor.html',ot=ot)
     if request.method=='POST':
         for f in ['diagnostico','reparacion','control_calidad','checklist','embalaje','despacho']:
             if f in request.form:setattr(ot,f,request.form.get(f))

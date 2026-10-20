@@ -9,7 +9,7 @@
 <section class="oti-group"><div class="oti-dark"><b>{{'%02d'|format(loop.index)}} · {{comp.componente|upper}}</b><small>{{comp.etapas|length}} etapas</small></div>
 {% for e in comp.etapas %}{% set prefix='e_'~ci~'_'~loop.index0~'_' %}{% set u=trabajadores|selectattr('nombre','equalto',e.responsable)|first|default(none) %}
 <div class="oti-step"><div class="oti-line"><span class="oti-name">{{loop.index}}. {{e.nombre}}</span><span class="oti-hours">{{'%g'|format(e.horas|float)}} h</span>
-<button type="button" class="oti-worker {% if not e.responsable %}oti-sp{% endif %}" style="{% if u %}background:{{u|color_trabajador}};color:#fff{% endif %}" title="{{e.responsable or 'Sin planificar'}}" onclick="otiToggle('{{prefix}}pick')">{{(u.sigla or u.nombre[:2]) if u else ('S/P' if not e.responsable else '—')}}</button>
+<button type="button" id="{{prefix}}button" class="oti-worker {% if not e.responsable %}oti-sp{% endif %}" style="{% if u %}background:{{u|color_trabajador}};color:#fff{% endif %}" title="{{e.responsable or 'Sin planificar'}}" onclick="otiToggle('{{prefix}}pick')">{{(u.sigla or u.nombre[:2]) if u else ('S/P' if not e.responsable else '—')}}</button>
 <button type="button" class="oti-edit" title="Editar reparación" aria-label="Editar reparación" onclick="otiToggle('{{prefix}}edit')">✎</button></div>
 <div id="{{prefix}}pick" class="oti-picker oti-hidden"><button type="button" onclick="otiWorker('{{prefix}}','', 'S/P', '', '')"><span class="oti-sp" style="padding:4px">S/P</span> Sin planificar</button>{% for t in trabajadores %}<button type="button" onclick="otiWorker('{{prefix}}',{{t.nombre|tojson}},{{(t.sigla or t.nombre[:2])|tojson}},{{(t|color_trabajador)|tojson}},{{t.nombre|tojson}})"><span style="background:{{t|color_trabajador}};color:white;padding:4px;border-radius:3px">{{t.sigla or t.nombre[:2]}}</span> {{t.nombre}}</button>{% endfor %}</div>
 <input type="hidden" id="{{prefix}}responsable" name="{{prefix}}responsable" value="{{e.responsable or ''}}">
@@ -23,7 +23,19 @@
 const otiWorkers={{trabajadores|map(attribute='nombre')|list|tojson}};
 const otiData={ {% for t in trabajadores %}{{t.nombre|tojson}}:{sig:{{(t.sigla or t.nombre[:2])|tojson}},color:{{(t|color_trabajador)|tojson}}},{% endfor %} };
 function otiToggle(id){document.getElementById(id).classList.toggle('oti-hidden')}
-function otiWorker(prefix,name,sig,color,title){document.getElementById(prefix+'responsable').value=name;const button=document.querySelector('[onclick="otiToggle(''+prefix+'pick')"]');button.textContent=sig;button.title=title||'Sin planificar';button.classList.toggle('oti-sp',!name);button.style.backgroundColor=name?color:'';button.style.color=name?'white':'';document.getElementById(prefix+'pick').classList.add('oti-hidden');otiLegend()}
+function otiWorker(prefix,name,sig,color,title){
+  const input=document.getElementById(prefix+'responsable');
+  const button=document.getElementById(prefix+'button');
+  if(!input||!button)return;
+  input.value=name;
+  button.textContent=sig;
+  button.title=title||'Sin planificar';
+  button.classList.toggle('oti-sp',!name);
+  button.style.backgroundColor=name?color:'';
+  button.style.color=name?'white':'';
+  document.getElementById(prefix+'pick').classList.add('oti-hidden');
+  otiLegend();
+}
 function otiLegend(){const names=new Set([...document.querySelectorAll('input[name$="responsable"]')].map(x=>x.value));const area=document.getElementById('oti-legend-items');area.replaceChildren();[...names].sort().forEach(name=>{const t=otiData[name]||{sig:'—',color:'#64748b'};const item=document.createElement('div');item.className='oti-legend-item';const mark=document.createElement('span');mark.textContent=name?t.sig:'S/P';mark.style.cssText='padding:3px 7px;border-radius:3px;font-weight:700;background:'+(name?t.color:'#fce8e8')+';color:'+(name?'white':'#a82020');const label=document.createElement('span');label.textContent=name||'SIN PLANIFICAR';item.append(mark,label);area.append(item)})}
 document.addEventListener('DOMContentLoaded',otiLegend);
 </script>

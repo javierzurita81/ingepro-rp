@@ -1927,10 +1927,18 @@ def cotizacion_pdf(qid):
     return send_file(buf,mimetype='application/pdf',as_attachment=True,download_name=f'{q.numero}.pdf')
 
 # Limpieza administrativa de datos transaccionales. Nunca modifica tablas maestras.
-TABLAS_LIMPIEZA=(LineaCotizacion,Cotizacion,PlanNoAplica,PlanActividad,OTReparacionSeleccionada,DiagnosticoHallazgo,OTComponente,OT)
+# Orden hijo -> padre: incluye todas las tablas transaccionales vinculadas a OT.
+# Nunca eliminar usuarios, clientes, modelos, componentes maestros ni reparaciones maestras.
+# OTInterna se define más abajo en este archivo; se resuelve en tiempo de ejecución.
+def tablas_limpieza():
+    return (LineaCotizacion, Cotizacion, PlanLiberacion, ProduccionEtapa,
+            OTInterna, PlanNoAplica, PlanActividad, OTReparacionSeleccionada,
+            DiagnosticoFoto, DiagnosticoMarca, DiagnosticoHallazgo,
+            OTComponente, OT)
+
 
 def conteos_limpieza():
-    return [(cls.__tablename__, db.session.query(cls).count()) for cls in TABLAS_LIMPIEZA]
+    return [(cls.__tablename__, db.session.query(cls).count()) for cls in tablas_limpieza()]
 
 def respaldo_completo():
     url=app.config['SQLALCHEMY_DATABASE_URI']
@@ -2079,9 +2087,17 @@ def ejecutar_limpieza_ot():
     if session.get('respaldo_ot_conteos')!=[list(x) for x in conteos_limpieza()]:
         session.pop('respaldo_ot_token',None)
         flash('Los datos cambiaron desde el respaldo. Genere uno nuevo.'); return redirect(url_for('limpieza_ot'))
-    # Protección contra limpieza de una base distinta de la respaldada.
+    # Eliminación transaccional, en orden de dependencias; rollback ante cualquier error.
     try:
-        for cls in TABLAS_LIMPIEZA: db.session.query(cls).delete(synchronize_session=False)
+        if db.engine.dialect.name == 'postgresql':
+            db.session.execute(db.text('SELECT pg_advisory_xact_lock(20261020)'))
+        # Revalidar bajo el bloqueo antes de borrar.
+        if session.get('respaldo_ot_conteos') != [list(x) for x in conteos_limpieza()]:
+            db.session.rollback()
+            session.pop('respaldo_ot_token', None)
+            flash('Los registros cambiaron. Genere un respaldo nuevo antes de limpiar.')
+            return redirect(url_for('limpieza_ot'))
+        for cls in tablas_limpieza(): db.session.query(cls).delete(synchronize_session=False)
         db.session.add(Auditoria(usuario=usuario_actual().nombre,accion='Limpieza total de OT de prueba',detalle='Datos transaccionales eliminados, maestros conservados.'))
         db.session.commit()
     except Exception:

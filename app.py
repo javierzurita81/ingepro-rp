@@ -2147,6 +2147,20 @@ def oti_pdf(id):
         story.extend([KeepTogether([cab,table]),Spacer(1,10)])
     summary=Table([[Paragraph('TOTAL HORAS ESTIMADAS',bold),Paragraph(f'{total:g} h',bold)]],colWidths=[w*.8,w*.2])
     summary.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),colors.HexColor('#EDEDED')),('TOPPADDING',(0,0),(-1,-1),9),('BOTTOMPADDING',(0,0),(-1,-1),9)]))
+    # Leyenda de responsables presentes en esta OT; PDF en escala de grises.
+    nombres={e.get('responsable','').strip() for c in contenido for e in c.get('etapas',[]) if e.get('responsable','').strip()}
+    sin_planificar=any(not e.get('responsable','').strip() for c in contenido for e in c.get('etapas',[]))
+    personal=Usuario.query.filter(Usuario.nombre.in_(nombres)).all() if nombres else []
+    mapa={u.nombre:u for u in personal}
+    leyenda=[]
+    for nombre in sorted(nombres):
+        u=mapa.get(nombre)
+        leyenda.append(f'{(u.sigla or "—") if u else "—"} = {nombre}')
+    if sin_planificar: leyenda.append('S/P = SIN PLANIFICAR (sin trabajador asignado)')
+    if leyenda:
+        story.extend([Spacer(1,10),Paragraph('LEYENDA DE RESPONSABLES Y PLANIFICACIÓN',bold),Spacer(1,5)])
+        for item in leyenda: story.append(Paragraph(escape(item),small))
+        story.append(Paragraph('Los colores de trabajadores se consultan en la OT digital y Planificación.',small))
     story.extend([summary,Spacer(1,14),Paragraph('OBSERVACIONES GENERALES',bold),Spacer(1,5),Paragraph(escape(doc.observaciones or '____________________________________________________________'),normal),Spacer(1,54)])
     firmas=Table([['____________________________','____________________________'],['JEFE DE ÁREA','RECEPCIÓN DE TRABAJOS'],['Nombre, firma y fecha','Nombre, firma y fecha']],colWidths=[w/2,w/2])
     firmas.setStyle(TableStyle([('ALIGN',(0,0),(-1,-1),'CENTER'),('FONTNAME',(0,1),(-1,1),'Helvetica-Bold'),('FONTSIZE',(0,0),(-1,-1),8),('TEXTCOLOR',(0,2),(-1,2),colors.grey),('BOTTOMPADDING',(0,0),(-1,0),8)]))

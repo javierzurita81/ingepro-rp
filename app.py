@@ -1349,18 +1349,8 @@ def planificacion():
         seleccion=OTReparacionSeleccionada.query.filter_by(ot_id=ot.id,ot_componente_id=comp_id,reparacion_maestra_id=rep_id).first()
         if not seleccion:
             db.session.add(OTReparacionSeleccionada(ot_id=ot.id,ot_componente_id=comp_id,reparacion_maestra_id=rep_id))
-        estimadas=float(rep.hh_estimadas or 0)
-        if estimadas>0:
-            ocupadas=sum((a.fecha_fin-a.fecha_inicio).days*a.horas_dia+a.horas_dia for a in asignaciones_reparacion(ot.id,comp_id,rep))
-            solicitadas=((ff-fi).days+1)*horas
-            if ocupadas+solicitadas>estimadas+0.0001:
-                flash(f'La reparación solo tiene {max(0,estimadas-ocupadas):g} HH pendientes.')
-                db.session.rollback()
-                return redirect(url_for('planificacion',mes=fi.month,anio=fi.year))
-        elif asignaciones_reparacion(ot.id,comp_id,rep):
-            flash('Esta reparación ya está programada. Revise el calendario antes de agregar otra asignación.')
-            db.session.rollback()
-            return redirect(url_for('planificacion',mes=fi.month,anio=fi.year))
+        # HH del maestro: referencia técnica, nunca límite de programación.
+        # La capacidad real del trabajador ya fue validada con validar_cupo().
         if not tarea: flash('Indique una tarea.'); return redirect(url_for('planificacion',mes=fi.month,anio=fi.year))
         a=PlanActividad(ot_id=ot.id,ot_componente_id=comp_id,reparacion_maestra_id=rep_id,usuario_id=int(request.form['usuario_id']),tarea=tarea,fecha_inicio=fi,fecha_fin=ff,horas_dia=horas,estado=request.form.get('estado','Planificada'),observacion=request.form.get('observacion','').strip())
         db.session.add(a); db.session.commit(); audit('Actividad planificada',f'{ot.numero}: {tarea}'); return redirect(url_for('planificacion',mes=fi.month,anio=fi.year))
@@ -1590,25 +1580,8 @@ def api_gantt_rapido():
             if a.id==aid: continue
             if (rep_id and a.reparacion_maestra_id==rep_id) or (original and a.tarea==original.tarea):
                 return jsonify(error='Este trabajador ya está asignado a esta etapa ese día.'),409
-        # Validar HH de la reparación tanto al CREAR como al EDITAR.
-        # La edición de una fecha en un rango solo sustituye las HH de ese día;
-        # el resto del rango conserva su programación.
-        rep_control=rep or (original.reparacion if original else None)
-        if rep_control:
-            prev=asignaciones_reparacion(ot_id,comp_id,rep_control)
-            estimadas=float(rep_control.hh_estimadas or 0)
-            total_actual=sum(((a.fecha_fin-a.fecha_inicio).days+1)*float(a.horas_dia or 0) for a in prev)
-            hh_anterior=float(original.horas_dia or 0) if original and original in prev else 0.0
-            total_nuevo=total_actual-hh_anterior+horas
-            if estimadas>0 and total_nuevo>estimadas+0.0001:
-                disponibles=max(0.0,estimadas-(total_actual-hh_anterior))
-                return jsonify(error=(f'HH estimadas: {estimadas:g}. '
-                    f'Programadas sin esta casilla: {total_actual-hh_anterior:g}. '
-                    f'HH pendientes de esta reparación: {disponibles:g}. '
-                    f'HH solicitadas: {horas:g}. '
-                    'Este límite corresponde a la estimación de la reparación, no a la jornada diaria del trabajador.')),400
-            if not estimadas and not original and prev:
-                return jsonify(error='Esta reparación ya tiene programación; revise las asignaciones existentes.'),400
+        # La estimación del maestro no limita las horas planificadas.
+        # validar_cupo() controla el máximo diario y evita sobreasignaciones.
     # Una asignación de varios días se divide para cambiar únicamente la fecha elegida.
     if original:
         start,end=original.fecha_inicio,original.fecha_fin
@@ -1646,8 +1619,8 @@ def api_plan_ot(ot_id):
                 programadas=sum(((a.fecha_fin-a.fecha_inicio).days+1)*(a.horas_dia or 0) for a in asignaciones)
                 no_aplica=PlanNoAplica.query.filter_by(ot_id=ot.id,ot_componente_id=c.id,reparacion_maestra_id=r.id).first() is not None
                 estimadas=float(r.hh_estimadas or 0)
-                restante=max(0,estimadas-programadas) if estimadas>0 else (0 if asignaciones else None)
-                estado='No aplica' if no_aplica else ('Programada' if restante==0 else ('Parcial' if asignaciones else 'Pendiente'))
+                restante=max(0,estimadas-programadas) if estimadas>0 else None
+                estado='No aplica' if no_aplica else ('Programada' if asignaciones else 'Pendiente')
                 reps.append({'id':r.id,'nombre':r.nombre,'hh':estimadas,'seleccionada':r.id in selected,'programadas':programadas,'restante':restante,'estado':estado})
         data.append({'id':c.id,'nombre':c.nombre,'vinculado':bool(c.componente_modelo_id),'reparaciones':reps})
     return jsonify(data)

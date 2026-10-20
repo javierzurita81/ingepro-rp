@@ -39,6 +39,29 @@ const IS_SUPERVISOR={{ es_supervisor|tojson }}, GOTS={{ gantt_data|tojson }}, GW
 const months=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
 const last=new Date(YEAR,MONTH,0).getDate(), weekdays=['D','L','M','M','J','V','S'];
 const expanded=new Set(GOTS.map(o=>o.id)), table=document.getElementById('gantt-table'), viewport=document.getElementById('gantt-viewport');
+// V7.58: conservar posición de la carta Gantt al guardar desde tablet o escritorio.
+const GANTT_POSITION_KEY='ingepro:gantt:position:'+location.pathname+location.search;
+function reloadKeepingGanttPosition(){
+ try{sessionStorage.setItem(GANTT_POSITION_KEY,JSON.stringify({
+   pageX:window.scrollX,pageY:window.scrollY,
+   ganttX:viewport.scrollLeft,ganttY:viewport.scrollTop,
+   expanded:[...expanded],savedAt:Date.now()
+ }));}catch(e){} // El guardado de la OT no depende del almacenamiento local.
+ window.location.reload();
+}
+function restoreGanttPosition(){
+ let saved;try{saved=JSON.parse(sessionStorage.getItem(GANTT_POSITION_KEY)||'null');sessionStorage.removeItem(GANTT_POSITION_KEY);}catch(e){return;}
+ if(!saved||Date.now()-saved.savedAt>120000)return;
+ if(Array.isArray(saved.expanded)){
+   expanded.clear();saved.expanded.forEach(id=>expanded.add(id));render();
+ }
+ // Esperar al layout definitivo para recuperar ambos ejes de desplazamiento.
+ requestAnimationFrame(()=>requestAnimationFrame(()=>{
+   viewport.scrollLeft=Number(saved.ganttX)||0;
+   viewport.scrollTop=Number(saved.ganttY)||0;
+   window.scrollTo(Number(saved.pageX)||0,Number(saved.pageY)||0);
+ }));
+}
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function row(type,label,meta){const tr=document.createElement('tr');tr.className='gantt-'+type;const left=document.createElement(type==='head'?'th':'td');left.className='gantt-fixed';left.textContent=label;tr.appendChild(left);if(type==='task'&&meta.task.rep){left.innerHTML=`<span class="gantt-stage-label" title="${esc(label)}">${esc(label)}</span><button type="button" class="gantt-state ${meta.task.no_aplica?'is-na':'is-aplica'}" aria-label="Cambiar estado de ${esc(label)}" aria-pressed="${meta.task.no_aplica?'true':'false'}" title="Haz clic para cambiar entre Aplica y No aplica">${meta.task.no_aplica?'No aplica':'Aplica'}</button>`;const sel=left.querySelector('button');sel.onclick=e=>{e.stopPropagation();updateStage(meta,sel)};if(IS_SUPERVISOR){sel.disabled=true;sel.title='Solo el administrador puede cambiar Aplica / No aplica'};if(meta.task.no_aplica)tr.classList.add('gantt-na')}if(type==='ot'){left.onclick=()=>{expanded.has(meta.id)?expanded.delete(meta.id):expanded.add(meta.id);render()};left.title='Expandir / contraer'}
  for(let d=1;d<=last;d++){const dow=new Date(YEAR,MONTH-1,d).getDay();const td=document.createElement(type==='head'?'th':'td');td.className='gantt-day'+([0,6].includes(dow)?' gantt-weekend':'');if(type==='head'){td.innerHTML=d+'<div style="font-size:9px;color:#667085">'+weekdays[dow]+'</div>'}if(type==='task'){if(meta.task.no_aplica){td.textContent='—';tr.appendChild(td);continue}const date=`${YEAR}-${String(MONTH).padStart(2,'0')}-${String(d).padStart(2,'0')}`;const found=meta.task.assignments.filter(a=>a.start<=date&&a.end>=date);if(found.length){const a=found[0],w=GW.find(w=>w.id===a.worker);td.innerHTML=`<div class="gantt-entry"><span>${esc(w?.sigla||a.sigla)} ${a.hours}h${found.length>1?' +'+(found.length-1):''}</span><i class="gantt-bar" style="background:${esc(w?.color||'#64748b')}"></i></div>`}else td.textContent='·';td.onclick=()=>openEditor(meta,date,found)}tr.appendChild(td)}return tr}
@@ -78,7 +101,7 @@ async function submitQuick(action){
   if(!contentType.includes('application/json')){error.textContent=response.status===403?'No tienes permiso para realizar esta operación.':'El servidor devolvió un error HTTP '+response.status+'. No se guardaron cambios.';return;}
   const result=await response.json();
   if(!response.ok||!result.ok){error.textContent=result.error||'No se pudo guardar.';return}
-  dialog.close();window.location.reload();
+  dialog.close();reloadKeepingGanttPosition();
  }catch(e){error.textContent='Error de conexión. No se han guardado los cambios.'}
 }
 document.getElementById('gantt-form').addEventListener('submit',e=>{e.preventDefault();submitQuick('guardar')});
@@ -87,11 +110,11 @@ document.getElementById('gantt-release').onclick=async()=>{
  const a=currentCell?.assignment;if(!a||IS_SUPERVISOR)return;
  if(!confirm('¿Liberar esta asignación para una modificación del supervisor?'))return;
  const error=document.getElementById('gantt-error');
- try{const r=await fetch('/api/planificacion/asignacion/'+encodeURIComponent(a.id)+'/liberar',{method:'POST'});const j=await r.json();if(!r.ok||!j.ok){error.textContent=j.error||'No se pudo liberar.';return;}dialog.close();window.location.reload();}
+ try{const r=await fetch('/api/planificacion/asignacion/'+encodeURIComponent(a.id)+'/liberar',{method:'POST'});const j=await r.json();if(!r.ok||!j.ok){error.textContent=j.error||'No se pudo liberar.';return;}dialog.close();reloadKeepingGanttPosition();}
  catch(e){error.textContent='No fue posible comunicarse con el servidor.';}
 };
 document.getElementById('gantt-cancel').onclick=()=>dialog.close();document.getElementById('gantt-expand').onclick=()=>{GOTS.forEach(o=>expanded.add(o.id));render()};document.getElementById('gantt-collapse').onclick=()=>{expanded.clear();render()};
 const nav=(delta)=>{let d=new Date(YEAR,MONTH-1+delta,1);return '?mes='+(d.getMonth()+1)+'&anio='+d.getFullYear()};document.getElementById('gantt-prev').href=nav(-1);document.getElementById('gantt-next').href=nav(1);document.getElementById('gantt-month').textContent=months[MONTH-1]+' '+YEAR;
-document.getElementById('gantt-legend').innerHTML=GW.map(w=>`<span><i style="background:${esc(w.color)}"></i>${esc(w.sigla)} · ${esc(w.name)}</span>`).join('');render();
+document.getElementById('gantt-legend').innerHTML=GW.map(w=>`<span><i style="background:${esc(w.color)}"></i>${esc(w.sigla)} · ${esc(w.name)}</span>`).join('');render();restoreGanttPosition();
 </script>
 {% endblock %}

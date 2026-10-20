@@ -1,0 +1,7 @@
+{% extends 'base.html' %}{% block c %}
+<section class="card"><h2>INGEPRO RP · {{ titulo }}</h2><p class="muted">{{ descripcion }}</p>
+<div class="tablewrap"><table><thead><tr><th>OT INGEPRO</th><th>Equipo</th><th>Cliente</th><th>Acción</th></tr></thead><tbody>
+{% for r in filas %}{% set o=r.ot %}<tr><td>{{ o.numero }}</td><td>{{ o.equipo }}</td><td>{{ o.cliente }}</td><td><a class="btn primary" href="{{ url_for(destino, ot_id=o.id) }}">Abrir {{ titulo }}</a></td></tr>
+{% else %}<tr><td colspan="4" class="empty">No hay OT registradas. Crea una OT para comenzar.</td></tr>{% endfor %}
+</tbody></table></div><p><a class="btn secondary" href="{{url_for('index')}}">← Volver al inicio</a></p></section>
+{% endblock %}

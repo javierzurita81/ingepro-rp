@@ -520,6 +520,20 @@ def index():
         for f in filas: f['precio']=None; f['cot']=None
     return render_template('index.html',filas=filas,buscar=request.args.get('buscar',''),filtro=request.args.get('estado',''))
 
+@app.route('/diagnosticos')
+@permiso_required('diagnostico')
+def diagnosticos_lista():
+    return render_template('informes_lista.html', titulo='Diagnóstico',
+                           descripcion='Selecciona una OT para registrar o consultar el diagnóstico técnico.',
+                           filas=listado_control_ot(), destino='diagnostico_ot')
+
+@app.route('/informes-salida')
+@permiso_required('diagnostico')
+def informes_salida_lista():
+    return render_template('informes_lista.html', titulo='Informe de Salida',
+                           descripcion='Selecciona una OT para registrar o consultar la condición final de sus componentes.',
+                           filas=listado_control_ot(), destino='salida_ot')
+
 @app.route('/ot')
 @login_required
 def control_general_ot():

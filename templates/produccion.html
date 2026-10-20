@@ -1,0 +1,49 @@
+{% extends 'base.html' %}{% block c %}
+<style>
+.prod-head{background:#303843;color:#fff;border-radius:12px;padding:19px;margin-bottom:16px}
+.prod-head h1{color:#fff;margin:4px 0}.prod-head p{color:#d8e0e8;margin:0}
+.prod-group{border:1px solid #d7dce1;border-radius:12px;padding:14px;margin:14px 0;background:#fff}
+.prod-comp{background:#404752;color:#fff;padding:11px;border-radius:7px;margin:10px 0;font-weight:700}
+.prod-stage{padding:12px;margin:8px 0;border-radius:8px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.prod-stage.green{background:#daf3e3;border-left:5px solid #16834b}
+.prod-stage.red{background:#fce4e4;border-left:5px solid #c42e2e}
+.prod-stage.gray{background:#e9edf0;border-left:5px solid #89939c}
+.prod-name{flex:1;min-width:190px}.prod-name small{display:block;color:#4c5966;margin-top:4px}
+.prod-worker{display:inline-block;padding:5px 8px;border-radius:5px;color:white;font-weight:bold;font-size:12px}
+.prod-legend{display:flex;gap:15px;flex-wrap:wrap;font-size:13px;margin:14px 0}
+.prod-dot{width:13px;height:13px;display:inline-block;border-radius:3px;vertical-align:middle;margin-right:5px}
+.prod-form{width:100%;padding-top:8px}.prod-form textarea{width:100%;max-width:700px;display:block;margin:8px 0}
+@media(max-width:700px){.prod-stage{align-items:flex-start}.prod-name{min-width:160px}}
+</style>
+<div class="prod-head"><small>INGEPRO · DIVISIÓN MAESTRANZA</small><h1>Control de Producción</h1><p>Reparaciones · {% if gerencia %}Gerencia{% else %}Jefatura directa{% endif %} · Término de etapas</p></div>
+<form method="get" action="{{url_for('produccion')}}" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px"><input type="search" name="buscar" value="{{buscar}}" placeholder="Buscar OT, cliente o equipo" style="flex:1;min-width:180px"><button class="btn primary" type="submit">Buscar</button><a class="btn secondary" href="{{url_for('produccion')}}">Todas</a></form>
+<div class="prod-legend"><span><i class="prod-dot" style="background:#16834b"></i>Verde: en ejecución</span><span><i class="prod-dot" style="background:#c42e2e"></i>Rojo: no completada</span><span><i class="prod-dot" style="background:#89939c"></i>Gris: terminada</span><span><i class="prod-dot" style="background:#efb5b5"></i>S/P: sin planificar</span></div>
+{% for g in grupos %}
+<section class="prod-group">
+<div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><div><strong>{{g.ot.numero}}</strong> · {{g.ot.equipo}}<br><small>{{g.ot.cliente}}</small></div><a class="btn secondary" href="{{url_for('ver_ot',ot_id=g.ot.id)}}">Ver OT</a></div>
+<div class="prod-comp">{{g.componente.nombre}}</div>
+{% set total=g.etapas|length %}{% set hechas=g.etapas|selectattr('estado','equalto','Terminada')|list|length %}
+<p class="muted">Avance: {{hechas}} / {{total}} etapas terminadas ({{((hechas*100/total) if total else 0)|round|int}}%)</p>
+{% for e in g.etapas %}
+{% set asignada=e.asignaciones|length > 0 %}
+{% set primera_pendiente=(g.etapas[:loop.index0]|selectattr('estado','ne','Terminada')|list|length)==0 %}
+{% set en_curso=(e.estado!='Terminada' and asignada and primera_pendiente) %}
+<div class="prod-stage {{'gray' if e.estado=='Terminada' else 'green' if en_curso else 'red'}}">
+<div class="prod-name"><strong>{{loop.index}}. {{e.rep.nombre}}</strong><small>{% if e.estado=='Terminada' %}Terminada{% elif en_curso %}En ejecución{% elif not asignada %}Sin planificar{% else %}Pendiente · no completada{% endif %} · Estimación {{e.rep.hh_estimadas or 0}} HH</small>
+{% if e.registro and e.registro.terminado_fecha %}<small>Terminada por usuario ID {{e.registro.terminado_por_id}} · {{e.registro.terminado_fecha.strftime('%d/%m/%Y %H:%M')}} UTC</small>{% endif %}
+{% if e.registro and e.registro.observacion %}<small>Observación: {{e.registro.observacion}}</small>{% endif %}
+</div>
+<div>{% for a in e.asignaciones %}<span class="prod-worker" style="background:{{a.responsable|color_trabajador}}" title="{{a.responsable.nombre}}">{{a.responsable.sigla or a.responsable.nombre[:3]}}</span>{% else %}<span style="background:#fce4e4;color:#a11e1e;padding:5px 9px;border-radius:5px;font-weight:700">S/P</span>{% endfor %}</div>
+{% if en_curso %}<button class="btn primary" type="button" onclick="document.getElementById('cerrar-{{g.componente.id}}-{{e.rep.id}}').hidden=false;this.hidden=true">Terminar</button>
+<form class="prod-form" hidden id="cerrar-{{g.componente.id}}-{{e.rep.id}}" method="post" action="{{url_for('produccion_terminar',ot_id=g.ot.id,comp_id=g.componente.id,rep_id=e.rep.id)}}">
+<input type="hidden" name="token" value="{{token}}"><input type="hidden" name="buscar" value="{{buscar}}">
+<label>Observaciones de la jefatura (opcional)</label><textarea name="observacion" rows="2" maxlength="3000" placeholder="Detalle del trabajo terminado..."></textarea>
+<button class="btn primary" type="submit" onclick="return confirm('¿Confirmar término de esta reparación?')">Confirmar término</button>
+<button class="btn secondary" type="button" onclick="this.closest('form').hidden=true;this.closest('.prod-stage').querySelector('button[onclick^=\'document\']').hidden=false">Cancelar</button>
+</form>{% endif %}
+</div>
+{% endfor %}
+</section>
+{% else %}<section class="card"><p>No hay reparaciones seleccionadas en OT con componentes recibidos para mostrar.</p></section>{% endfor %}
+<p class="muted">Solo usuarios autorizados en «Control de producción (jefaturas)» pueden registrar términos. Los ejecutores no tienen acceso por defecto. Las etapas terminadas permanecen registradas.</p>
+{% endblock %}

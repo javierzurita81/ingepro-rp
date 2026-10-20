@@ -40,7 +40,7 @@ db = SQLAlchemy(app)
 PERMISOS = {
  'ingreso':'Ingreso de equipos', 'diagnostico':'Diagnóstico', 'cotizaciones':'Cotizaciones',
  'reparacion':'Reparación', 'calidad':'Control de calidad', 'despacho':'Embalaje y despacho',
- 'informes':'Informes', 'maestros':'Maestros', 'clientes':'Clientes y contactos', 'planificacion':'Planificación', 'usuarios':'Administración de usuarios'
+ 'informes':'Informes', 'maestros':'Maestros', 'clientes':'Clientes y contactos', 'planificacion':'Planificación', 'produccion':'Control de producción (jefaturas)', 'usuarios':'Administración de usuarios'
 }
 
 class Usuario(db.Model):
@@ -110,6 +110,18 @@ class PlanActividad(db.Model):
     componente=db.relationship('OTComponente')
     reparacion=db.relationship('ReparacionMaestra')
     responsable=db.relationship('Usuario')
+
+
+class ProduccionEtapa(db.Model):
+    id=db.Column(db.Integer,primary_key=True)
+    ot_id=db.Column(db.Integer,db.ForeignKey('ot.id'),nullable=False,index=True)
+    ot_componente_id=db.Column(db.Integer,db.ForeignKey('ot_componente.id'),nullable=False,index=True)
+    reparacion_maestra_id=db.Column(db.Integer,db.ForeignKey('reparacion_maestra.id'),nullable=False,index=True)
+    estado=db.Column(db.String(25),nullable=False,default='Pendiente')
+    observacion=db.Column(db.Text)
+    terminado_por_id=db.Column(db.Integer,db.ForeignKey('usuario.id'))
+    terminado_fecha=db.Column(db.DateTime)
+    __table_args__=(db.UniqueConstraint('ot_componente_id','reparacion_maestra_id',name='uq_produccion_etapa'),)
 
 class Auditoria(db.Model):
     id=db.Column(db.Integer, primary_key=True); fecha=db.Column(db.DateTime, default=datetime.utcnow)
@@ -2185,6 +2197,75 @@ def oti_pdf(id):
     pdf.build(story,onFirstPage=pagina,onLaterPages=pagina)
     buf.seek(0)
     return send_file(buf,mimetype='application/pdf',as_attachment=False,download_name=doc.numero+'.pdf')
+
+
+@app.route('/produccion')
+@permiso_required('produccion')
+def produccion():
+    buscar=(request.args.get('buscar') or '').strip()
+    filas=OTReparacionSeleccionada.query.order_by(OTReparacionSeleccionada.ot_id.desc(),OTReparacionSeleccionada.ot_componente_id).all()
+    if buscar:
+        ots=OT.query.filter((OT.numero.ilike('%'+buscar+'%')) | (OT.equipo.ilike('%'+buscar+'%')) | (OT.cliente.ilike('%'+buscar+'%'))).with_entities(OT.id).all()
+        ids=[r[0] for r in ots]
+        filas=[r for r in filas if r.ot_id in ids]
+    ids_ot={r.ot_id for r in filas}; ids_comp={r.ot_componente_id for r in filas}; ids_rep={r.reparacion_maestra_id for r in filas}
+    ots={o.id:o for o in OT.query.filter(OT.id.in_(ids_ot)).all()} if ids_ot else {}
+    comps={c.id:c for c in OTComponente.query.filter(OTComponente.id.in_(ids_comp)).all()} if ids_comp else {}
+    reps={r.id:r for r in ReparacionMaestra.query.filter(ReparacionMaestra.id.in_(ids_rep)).all()} if ids_rep else {}
+    etapas=ProduccionEtapa.query.filter(ProduccionEtapa.ot_componente_id.in_(ids_comp)).all() if ids_comp else []
+    estados={(e.ot_componente_id,e.reparacion_maestra_id):e for e in etapas}
+    actividades=PlanActividad.query.filter(PlanActividad.ot_componente_id.in_(ids_comp)).all() if ids_comp else []
+    plan={}
+    for a in actividades:
+        plan.setdefault((a.ot_componente_id,a.reparacion_maestra_id),[]).append(a)
+    grupos={}
+    for f in filas:
+        ot=ots.get(f.ot_id); comp=comps.get(f.ot_componente_id); rep=reps.get(f.reparacion_maestra_id)
+        if not ot or not comp or not rep or comp.condicion_ingreso!='Recibido': continue
+        key=(ot.id,comp.id)
+        if key not in grupos: grupos[key]={'ot':ot,'componente':comp,'etapas':[]}
+        registro=estados.get((comp.id,rep.id))
+        asignaciones=plan.get((comp.id,rep.id),[])
+        estado=registro.estado if registro else ('En ejecución' if asignaciones and any(a.estado in ('En ejecución','En proceso') for a in asignaciones) else 'Pendiente')
+        grupos[key]['etapas'].append({'rep':rep,'estado':estado,'registro':registro,'asignaciones':asignaciones})
+    for g in grupos.values():
+        g['etapas'].sort(key=lambda e:(e['rep'].secuencia or 0,e['rep'].id))
+    if 'produccion_token' not in session: session['produccion_token']=secrets.token_urlsafe(24)
+    return render_template('produccion.html',grupos=list(grupos.values()),buscar=buscar,gerencia=usuario_actual().es_admin,token=session['produccion_token'])
+
+@app.route('/produccion/terminar/<int:ot_id>/<int:comp_id>/<int:rep_id>',methods=['POST'])
+@permiso_required('produccion')
+def produccion_terminar(ot_id,comp_id,rep_id):
+    if not secrets.compare_digest(request.form.get('token',''),session.get('produccion_token','')): abort(400)
+    seleccionado=OTReparacionSeleccionada.query.filter_by(ot_id=ot_id,ot_componente_id=comp_id,reparacion_maestra_id=rep_id).first_or_404()
+    comp=OTComponente.query.filter_by(id=comp_id,ot_id=ot_id,condicion_ingreso='Recibido').first_or_404()
+    rep=ReparacionMaestra.query.filter_by(id=rep_id,componente_modelo_id=comp.componente_modelo_id).first_or_404()
+    asignaciones=PlanActividad.query.filter_by(ot_id=ot_id,ot_componente_id=comp_id,reparacion_maestra_id=rep_id).all()
+    if not asignaciones:
+        flash('Esta etapa no tiene planificación. No se puede cerrar.')
+        return redirect(url_for('produccion'))
+    etapa=ProduccionEtapa.query.filter_by(ot_componente_id=comp_id,reparacion_maestra_id=rep_id).first()
+    if etapa and etapa.estado=='Terminada':
+        flash('Esta etapa ya fue terminada.')
+        return redirect(url_for('produccion'))
+    anteriores=OTReparacionSeleccionada.query.filter_by(ot_id=ot_id,ot_componente_id=comp_id).all()
+    prev_ids=[r.reparacion_maestra_id for r in anteriores]
+    prev_reps=ReparacionMaestra.query.filter(ReparacionMaestra.id.in_(prev_ids)).order_by(ReparacionMaestra.secuencia,ReparacionMaestra.id).all()
+    for anterior in prev_reps:
+        if anterior.id==rep_id: break
+        prev_estado=ProduccionEtapa.query.filter_by(ot_componente_id=comp_id,reparacion_maestra_id=anterior.id).first()
+        if not prev_estado or prev_estado.estado!='Terminada':
+            flash('Primero debe finalizar la etapa anterior: '+anterior.nombre)
+            return redirect(url_for('produccion'))
+    if not etapa:
+        etapa=ProduccionEtapa(ot_id=ot_id,ot_componente_id=comp_id,reparacion_maestra_id=rep_id)
+        db.session.add(etapa)
+    etapa.estado='Terminada'; etapa.observacion=(request.form.get('observacion') or '').strip()[:3000]
+    etapa.terminado_por_id=usuario_actual().id; etapa.terminado_fecha=datetime.utcnow()
+    db.session.commit()
+    audit('Etapa de reparación terminada',f'OT {ot_id}; componente {comp_id}; reparación {rep.nombre}; jefatura {usuario_actual().nombre}')
+    flash('Etapa terminada y registrada. La siguiente etapa queda disponible según su planificación.')
+    return redirect(url_for('produccion',buscar=request.form.get('buscar','')))
 
 with app.app_context(): db.create_all(); asegurar_columnas(); seed_maestros()
 if __name__=='__main__': app.run(host='0.0.0.0',port=int(os.environ.get('PORT',5000)),debug=True)

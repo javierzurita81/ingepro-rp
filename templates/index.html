@@ -7,6 +7,7 @@
 {% if usuario_actual.puede('maestros') %}<a class="module-card" href="{{url_for('maestros_equipos')}}"><b>Maestro de Equipos</b><span>Tipo, marca, modelo, despiece, componentes y materiales.</span><strong>Administrar equipos</strong></a>{% endif %}
 {% if usuario_actual.puede('planificacion') %}<a class="module-card" href="{{url_for('planificacion_gantt')}}"><b>Planificación</b><span>Carta Gantt compacta, etapas Aplica/No aplica, responsables y PDF mensual.</span><strong>Abrir planificación</strong></a>{% endif %}
 {% if usuario_actual.puede('planificacion') %}<a class="module-card" href="{{url_for('oti_lista')}}"><b>OT Internas</b><span>Generar, buscar, editar y emitir órdenes internas por componente y reparación.</span><strong>+ Abrir módulo OT Internas</strong></a>{% endif %}
+{% if usuario_actual.puede('produccion') %}<a class="module-card" href="{{url_for('produccion')}}"><b>Control de Producción</b><span>Jefaturas: seguimiento de reparaciones, etapas y registro de término.</span><strong>Abrir control de producción</strong></a>{% endif %}
 {% if usuario_actual.puede('usuarios') %}<a class="module-card" href="{{url_for('usuarios')}}"><b>Usuarios INGEPRO</b><span>Crear usuarios internos, cargos, accesos y permisos.</span><strong>+ Crear / administrar usuarios</strong></a>{% endif %}
 </div>{% endif %}
 <section class="card ot-compact-panel" id="ot-listado">

@@ -59,6 +59,8 @@ function openEditor(meta,date,found){
  document.getElementById('gantt-start').value=date;
  document.getElementById('gantt-end').value=date;
  document.getElementById('gantt-worker').value=a?.worker||GW[0]?.id||'';
+ const dow=new Date(date+'T12:00:00').getDay();
+ document.getElementById('gantt-hours').max=(dow===1||dow===2)?9:8;
  document.getElementById('gantt-hours').value=a?.hours||2;
  document.getElementById('gantt-delete').style.display=a?'':'none';
  document.getElementById('gantt-error').textContent=found.length>1?'Hay varios responsables; se editará el primero.':'';

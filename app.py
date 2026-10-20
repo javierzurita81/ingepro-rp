@@ -1218,11 +1218,11 @@ def horas_ocupadas(usuario_id, dia, excluir_id=None):
     return sum(a.horas_dia or 0 for a in q.all() if a.estado!='Terminada')
 
 def limite_horas_dia(dia):
-    """Jornada operativa: lun-mié 9h, jue-vie 8h.
-    Sábado y domingo conservan provisionalmente el límite anterior (8h),
-    hasta definir su política en una versión posterior.
+    """Jornada ordinaria: lunes y martes 9h; miércoles a viernes 8h.
+    Los límites provisionales de sábado y domingo se mantienen sin cambios
+    hasta acordar una política de fin de semana y horas extraordinarias.
     """
-    return 9.0 if dia.weekday() in (0, 1, 2) else 8.0
+    return 9.0 if dia.weekday() in (0, 1) else 8.0
 
 
 app.jinja_env.globals['limite_horas_dia'] = limite_horas_dia
@@ -1604,8 +1604,9 @@ def api_gantt_rapido():
                 disponibles=max(0.0,estimadas-(total_actual-hh_anterior))
                 return jsonify(error=(f'HH estimadas: {estimadas:g}. '
                     f'Programadas sin esta casilla: {total_actual-hh_anterior:g}. '
-                    f'Disponibles: {disponibles:g} HH. '
-                    f'Solicitadas: {horas:g} HH.')),400
+                    f'HH pendientes de esta reparación: {disponibles:g}. '
+                    f'HH solicitadas: {horas:g}. '
+                    'Este límite corresponde a la estimación de la reparación, no a la jornada diaria del trabajador.')),400
             if not estimadas and not original and prev:
                 return jsonify(error='Esta reparación ya tiene programación; revise las asignaciones existentes.'),400
     # Una asignación de varios días se divide para cambiar únicamente la fecha elegida.

@@ -2228,10 +2228,18 @@ def produccion():
         asignaciones=plan.get((comp.id,rep.id),[])
         estado=registro.estado if registro else ('En ejecución' if asignaciones and any(a.estado in ('En ejecución','En proceso') for a in asignaciones) else 'Pendiente')
         grupos[key]['etapas'].append({'rep':rep,'estado':estado,'registro':registro,'asignaciones':asignaciones})
-    for g in grupos.values():
+    ordenes={}
+    for (ot_id,comp_id),g in grupos.items():
         g['etapas'].sort(key=lambda e:(e['rep'].secuencia or 0,e['rep'].id))
+        if ot_id not in ordenes:
+            ordenes[ot_id]={'ot':g['ot'],'componentes':[],'total':0,'terminadas':0}
+        ordenes[ot_id]['componentes'].append(g)
+        ordenes[ot_id]['total']+=len(g['etapas'])
+        ordenes[ot_id]['terminadas']+=sum(e['estado']=='Terminada' for e in g['etapas'])
+    for orden in ordenes.values():
+        orden['componentes'].sort(key=lambda g:g['componente'].id)
     if 'produccion_token' not in session: session['produccion_token']=secrets.token_urlsafe(24)
-    return render_template('produccion.html',grupos=list(grupos.values()),buscar=buscar,gerencia=usuario_actual().es_admin,token=session['produccion_token'])
+    return render_template('produccion.html',ordenes=list(ordenes.values()),buscar=buscar,gerencia=usuario_actual().es_admin,token=session['produccion_token'])
 
 @app.route('/produccion/terminar/<int:ot_id>/<int:comp_id>/<int:rep_id>',methods=['POST'])
 @permiso_required('produccion')

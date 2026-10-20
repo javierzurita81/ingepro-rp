@@ -2,28 +2,41 @@
 <style>
 .prod-head{background:#303843;color:#fff;border-radius:12px;padding:19px;margin-bottom:16px}
 .prod-head h1{color:#fff;margin:4px 0}.prod-head p{color:#d8e0e8;margin:0}
-.prod-group{border:1px solid #d7dce1;border-radius:12px;padding:14px;margin:14px 0;background:#fff}
-.prod-comp{background:#404752;color:#fff;padding:11px;border-radius:7px;margin:10px 0;font-weight:700}
+.prod-group{background:#fff;border:2px solid #515963;border-radius:14px;padding:14px;margin:18px 0 24px}
+.prod-ot-head{background:#111;color:#fff;border-radius:9px;padding:16px;margin-bottom:13px}
+.prod-ot-head strong{color:#fff;font-size:19px}.prod-ot-head small{color:#d4d4d4}
+.prod-ot-head a{color:#fff;border-color:#b7bdc5}
+.prod-progress{color:#414b56;margin:9px 0 14px}
+.prod-bar{height:9px;background:#e7e9ec;border-radius:10px;overflow:hidden;margin-top:7px}
+.prod-bar-fill{height:100%;background:#29966d}
+.prod-component{background:#c7cdd3;border:1px solid #a8b0b8;border-radius:10px;padding:12px;margin:12px 0}
+.prod-comp{background:#737d88;color:#fff;padding:11px;border-radius:7px;margin-bottom:10px;font-weight:700}
 .prod-stage{padding:12px;margin:8px 0;border-radius:8px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
-.prod-stage.green{background:#daf3e3;border-left:5px solid #16834b}
-.prod-stage.red{background:#fce4e4;border-left:5px solid #c42e2e}
+.prod-stage.green{background:#d6f0de;border-left:5px solid #16834b}
+.prod-stage.red{background:#f8dede;border-left:5px solid #c42e2e}
 .prod-stage.gray{background:#e9edf0;border-left:5px solid #89939c}
 .prod-name{flex:1;min-width:190px}.prod-name small{display:block;color:#4c5966;margin-top:4px}
 .prod-worker{display:inline-block;padding:5px 8px;border-radius:5px;color:white;font-weight:bold;font-size:12px}
 .prod-legend{display:flex;gap:15px;flex-wrap:wrap;font-size:13px;margin:14px 0}
 .prod-dot{width:13px;height:13px;display:inline-block;border-radius:3px;vertical-align:middle;margin-right:5px}
 .prod-form{width:100%;padding-top:8px}.prod-form textarea{width:100%;max-width:700px;display:block;margin:8px 0}
-@media(max-width:700px){.prod-stage{align-items:flex-start}.prod-name{min-width:160px}}
+@media(max-width:700px){.prod-stage{align-items:flex-start}.prod-name{min-width:150px}.prod-group{padding:9px}.prod-component{padding:9px}}
 </style>
 <div class="prod-head"><small>INGEPRO · DIVISIÓN MAESTRANZA</small><h1>Control de Producción</h1><p>Reparaciones · {% if gerencia %}Gerencia{% else %}Jefatura directa{% endif %} · Término de etapas</p></div>
 <form method="get" action="{{url_for('produccion')}}" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px"><input type="search" name="buscar" value="{{buscar}}" placeholder="Buscar OT, cliente o equipo" style="flex:1;min-width:180px"><button class="btn primary" type="submit">Buscar</button><a class="btn secondary" href="{{url_for('produccion')}}">Todas</a></form>
 <div class="prod-legend"><span><i class="prod-dot" style="background:#16834b"></i>Verde: en ejecución</span><span><i class="prod-dot" style="background:#c42e2e"></i>Rojo: no completada</span><span><i class="prod-dot" style="background:#89939c"></i>Gris: terminada</span><span><i class="prod-dot" style="background:#efb5b5"></i>S/P: sin planificar</span></div>
-{% for g in grupos %}
+{% for orden in ordenes %}
 <section class="prod-group">
-<div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><div><strong>{{g.ot.numero}}</strong> · {{g.ot.equipo}}<br><small>{{g.ot.cliente}}</small></div><a class="btn secondary" href="{{url_for('ver_ot',ot_id=g.ot.id)}}">Ver OT</a></div>
-<div class="prod-comp">{{g.componente.nombre}}</div>
+<div class="prod-ot-head">
+<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><strong>{{orden.ot.numero}}</strong><a class="btn secondary" href="{{url_for('ver_ot',ot_id=orden.ot.id)}}">Ver OT</a></div>
+<div style="margin-top:7px">{{orden.ot.equipo}}</div><small>{{orden.ot.cliente}}</small>
+</div>
+<div class="prod-progress"><strong>Avance general de la OT: {{orden.terminadas}} / {{orden.total}} etapas ({{((orden.terminadas*100/orden.total) if orden.total else 0)|round|int}}%)</strong><div class="prod-bar"><div class="prod-bar-fill" style="width:{{((orden.terminadas*100/orden.total) if orden.total else 0)|round|int}}%"></div></div></div>
+{% for g in orden.componentes %}
+<div class="prod-component">
+<div class="prod-comp">{{loop.index|string|upper}} · {{g.componente.nombre}}</div>
 {% set total=g.etapas|length %}{% set hechas=g.etapas|selectattr('estado','equalto','Terminada')|list|length %}
-<p class="muted">Avance: {{hechas}} / {{total}} etapas terminadas ({{((hechas*100/total) if total else 0)|round|int}}%)</p>
+<p class="muted">Avance del componente: {{hechas}} / {{total}} etapas terminadas ({{((hechas*100/total) if total else 0)|round|int}}%)</p>
 {% for e in g.etapas %}
 {% set asignada=e.asignaciones|length > 0 %}
 {% set primera_pendiente=(g.etapas[:loop.index0]|selectattr('estado','ne','Terminada')|list|length)==0 %}
@@ -41,6 +54,8 @@
 <button class="btn primary" type="submit" onclick="return confirm('¿Confirmar término de esta reparación?')">Confirmar término</button>
 <button class="btn secondary" type="button" onclick="this.closest('form').hidden=true;this.closest('.prod-stage').querySelector('button[onclick^=\'document\']').hidden=false">Cancelar</button>
 </form>{% endif %}
+</div>
+{% endfor %}
 </div>
 {% endfor %}
 </section>

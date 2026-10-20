@@ -1,0 +1,2 @@
+# INGEPRO RP V7.45
+Nuevo módulo OT Internas a continuación de Planificación. Usa componentes recibidos y reparaciones seleccionadas/programadas. Permite trabajadores sin asignar, edición, persistencia PostgreSQL y PDF A4 en grises con logo. Las tablas nuevas se crean con `db.create_all()` al iniciar. No modifica ni borra registros de OT o planificación existentes. Se recomienda respaldo previo al despliegue.

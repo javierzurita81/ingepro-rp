@@ -2029,5 +2029,147 @@ def ejecutar_limpieza_ot():
     return redirect(url_for('limpieza_ot'))
 
 
+
+# INGEPRO RP V7.45 - Ordenes de trabajo internas
+class OTInterna(db.Model):
+    id=db.Column(db.Integer,primary_key=True)
+    ot_id=db.Column(db.Integer,db.ForeignKey('ot.id'),nullable=False,index=True)
+    numero=db.Column(db.String(40),unique=True,nullable=False)
+    revision=db.Column(db.Integer,default=1,nullable=False)
+    creado=db.Column(db.DateTime,default=datetime.utcnow)
+    actualizado=db.Column(db.DateTime,default=datetime.utcnow,onupdate=datetime.utcnow)
+    creado_por=db.Column(db.String(120))
+    estado=db.Column(db.String(30),default='Borrador')
+    contenido_json=db.Column(db.Text,nullable=False,default='[]')
+    observaciones=db.Column(db.Text)
+    ot=db.relationship('OT')
+
+
+def oti_origen(ot):
+    """Solo componentes recibidos y trabajos seleccionados o programados."""
+    resultado=[]
+    for comp in ot.componentes_detalle:
+        if (comp.condicion_ingreso or '').strip().casefold()!='recibido': continue
+        selecciones=OTReparacionSeleccionada.query.filter_by(ot_id=ot.id,ot_componente_id=comp.id).all()
+        asignaciones=PlanActividad.query.filter_by(ot_id=ot.id,ot_componente_id=comp.id).order_by(PlanActividad.fecha_inicio,PlanActividad.id).all()
+        trabajos={}
+        for s in selecciones:
+            rep=db.session.get(ReparacionMaestra,s.reparacion_maestra_id)
+            if rep: trabajos['r'+str(rep.id)]={'nombre':rep.nombre,'instrucciones':rep.descripcion or '', 'horas':float(rep.hh_estimadas or 0),'responsable':'','estado':'Pendiente','origen':rep.id}
+        for a in asignaciones:
+            key='r'+str(a.reparacion_maestra_id) if a.reparacion_maestra_id else 'a'+str(a.id)
+            if key not in trabajos:
+                trabajos[key]={'nombre':a.reparacion.nombre if a.reparacion else a.tarea,'instrucciones':'','horas':0,'responsable':'','estado':'Pendiente','origen':a.reparacion_maestra_id}
+            t=trabajos[key]
+            if a.responsable: t['responsable']=a.responsable.nombre
+            if not t['horas']: t['horas']=float((a.fecha_fin-a.fecha_inicio).days+1)*float(a.horas_dia or 0)
+            if a.observacion and not t['instrucciones']: t['instrucciones']=a.observacion
+        if trabajos: resultado.append({'componente_id':comp.id,'componente':comp.nombre,'etapas':list(trabajos.values())})
+    return resultado
+
+@app.route('/ot-internas')
+@permiso_required('planificacion')
+def oti_lista():
+    items=OTInterna.query.order_by(OTInterna.id.desc()).limit(150).all()
+    ots=OT.query.order_by(OT.fecha.desc()).limit(300).all()
+    return render_template('ot_internas.html',items=items,ots=ots)
+
+@app.route('/ot-internas/nueva/<int:ot_id>',methods=['POST'])
+@permiso_required('planificacion')
+def oti_nueva(ot_id):
+    ot=db.session.get(OT,ot_id) or abort(404)
+    contenido=oti_origen(ot)
+    if not contenido:
+        flash('La OT no tiene trabajos seleccionados o planificados en componentes recibidos.')
+        return redirect(url_for('oti_lista'))
+    nuevo=OTInterna(ot_id=ot.id,numero='TEMP-'+secrets.token_hex(8),creado_por=usuario_actual().nombre,contenido_json=json.dumps(contenido,ensure_ascii=False))
+    db.session.add(nuevo);db.session.flush()
+    nuevo.numero='OTI-'+str(nuevo.id).zfill(6)
+    db.session.commit()
+    audit('OT interna creada',nuevo.numero+' / '+ot.numero)
+    return redirect(url_for('oti_editar',id=nuevo.id))
+
+@app.route('/ot-internas/<int:id>',methods=['GET','POST'])
+@permiso_required('planificacion')
+def oti_editar(id):
+    doc=db.session.get(OTInterna,id) or abort(404)
+    contenido=json.loads(doc.contenido_json or '[]')
+    if request.method=='POST':
+        for ci,c in enumerate(contenido):
+            for ei,e in enumerate(c['etapas']):
+                prefix=f'e_{ci}_{ei}_'
+                e['nombre']=(request.form.get(prefix+'nombre') or e['nombre']).strip()[:180]
+                e['instrucciones']=(request.form.get(prefix+'instrucciones') or '').strip()[:3000]
+                e['responsable']=(request.form.get(prefix+'responsable') or '').strip()[:120]
+                e['estado']=request.form.get(prefix+'estado','Pendiente') if request.form.get(prefix+'estado') in ('Pendiente','En ejecución','Terminada') else 'Pendiente'
+                try:e['horas']=max(0,float(request.form.get(prefix+'horas') or 0))
+                except ValueError:e['horas']=0
+        doc.contenido_json=json.dumps(contenido,ensure_ascii=False)
+        doc.observaciones=(request.form.get('observaciones') or '')[:3000]
+        doc.estado='Emitida' if request.form.get('accion')=='emitir' else 'Borrador'
+        db.session.commit();audit('OT interna guardada',doc.numero)
+        flash('OT interna guardada correctamente.')
+        return redirect(url_for('oti_editar',id=id))
+    trabajadores=Usuario.query.filter_by(activo=True,disponible_planificacion=True).order_by(Usuario.nombre).all()
+    return render_template('ot_interna_editar.html',doc=doc,contenido=contenido,trabajadores=trabajadores)
+
+@app.route('/ot-internas/<int:id>/pdf')
+@permiso_required('planificacion')
+def oti_pdf(id):
+    from reportlab.lib.utils import ImageReader
+    from reportlab.platypus import KeepTogether
+    from xml.sax.saxutils import escape
+    doc=db.session.get(OTInterna,id) or abort(404)
+    contenido=json.loads(doc.contenido_json or '[]')
+    buf=BytesIO()
+    pdf=SimpleDocTemplate(buf,pagesize=A4,rightMargin=35,leftMargin=35,topMargin=103,bottomMargin=55,title=doc.numero)
+    w=A4[0]-70
+    normal=ParagraphStyle('oti-normal',fontName='Helvetica',fontSize=8.2,leading=11,spaceAfter=0)
+    small=ParagraphStyle('oti-small',parent=normal,fontSize=7.2,leading=10,textColor=colors.HexColor('#555555'))
+    bold=ParagraphStyle('oti-bold',parent=normal,fontName='Helvetica-Bold')
+    story=[]
+    datos=[['OT PRINCIPAL',doc.ot.numero,'CLIENTE',doc.ot.cliente],['EQUIPO',doc.ot.equipo,'ESTADO',doc.estado]]
+    meta=Table([[Paragraph(escape(str(v)),bold if j%2==0 else normal) for j,v in enumerate(row)] for row in datos],colWidths=[w*.18,w*.32,w*.18,w*.32])
+    meta.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),colors.HexColor('#F5F5F5')),('GRID',(0,0),(-1,-1),.35,colors.HexColor('#CCCCCC')),('VALIGN',(0,0),(-1,-1),'MIDDLE'),('TOPPADDING',(0,0),(-1,-1),8),('BOTTOMPADDING',(0,0),(-1,-1),8)]))
+    story.extend([meta,Spacer(1,13)])
+    total=0
+    for c in contenido:
+        cab=Table([[Paragraph(escape(c['componente'].upper()),bold)]],colWidths=[w])
+        cab.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),colors.HexColor('#E1E1E1')),('BOX',(0,0),(-1,-1),.4,colors.HexColor('#BBBBBB')),('TOPPADDING',(0,0),(-1,-1),8),('BOTTOMPADDING',(0,0),(-1,-1),8)]))
+        rows=[[Paragraph('N.º',bold),Paragraph('ETAPA / INSTRUCCIONES',bold),Paragraph('RESPONSABLE',bold),Paragraph('HRS.',bold)]]
+        for j,e in enumerate(c['etapas'],1):
+            h=float(e.get('horas') or 0);total+=h
+            desc=escape(e.get('instrucciones') or '')
+            cell=Paragraph('<b>'+escape(e.get('nombre') or '')+'</b>'+(('<br/>'+desc) if desc else ''),normal)
+            rows.append([str(j),cell,Paragraph(escape(e.get('responsable') or 'SIN ASIGNAR'),small),f'{h:g}'])
+        table=Table(rows,colWidths=[w*.06,w*.61,w*.23,w*.10],repeatRows=1,hAlign='LEFT')
+        table.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),colors.HexColor('#F1F1F1')),('LINEBELOW',(0,0),(-1,-1),.35,colors.HexColor('#D5D5D5')),('VALIGN',(0,0),(-1,-1),'TOP'),('LEFTPADDING',(0,0),(-1,-1),7),('RIGHTPADDING',(0,0),(-1,-1),5),('TOPPADDING',(0,0),(-1,-1),7),('BOTTOMPADDING',(0,0),(-1,-1),7)]))
+        story.extend([KeepTogether([cab,table]),Spacer(1,10)])
+    summary=Table([[Paragraph('TOTAL HORAS ESTIMADAS',bold),Paragraph(f'{total:g} h',bold)]],colWidths=[w*.8,w*.2])
+    summary.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),colors.HexColor('#EDEDED')),('TOPPADDING',(0,0),(-1,-1),9),('BOTTOMPADDING',(0,0),(-1,-1),9)]))
+    story.extend([summary,Spacer(1,14),Paragraph('OBSERVACIONES GENERALES',bold),Spacer(1,5),Paragraph(escape(doc.observaciones or '____________________________________________________________'),normal),Spacer(1,54)])
+    firmas=Table([['____________________________','____________________________'],['JEFE DE ÁREA','RECEPCIÓN DE TRABAJOS'],['Nombre, firma y fecha','Nombre, firma y fecha']],colWidths=[w/2,w/2])
+    firmas.setStyle(TableStyle([('ALIGN',(0,0),(-1,-1),'CENTER'),('FONTNAME',(0,1),(-1,1),'Helvetica-Bold'),('FONTSIZE',(0,0),(-1,-1),8),('TEXTCOLOR',(0,2),(-1,2),colors.grey),('BOTTOMPADDING',(0,0),(-1,0),8)]))
+    story.append(firmas)
+    def pagina(canv,pdfdoc):
+        canv.saveState();pw,ph=A4
+        canv.setFillColor(colors.HexColor('#D4D4D4'));canv.rect(35,ph-91,pw-70,59,stroke=0,fill=1)
+        logo=Path(app.root_path)/'static/img/logo-ingepro-small.png'
+        if logo.exists():
+            try:
+                from PIL import Image as Img,ImageOps as Ops
+                src=Img.open(logo).convert('RGBA'); alpha=src.getchannel('A');g=Ops.grayscale(src.convert('RGB'));mono=Img.merge('RGBA',(g,g,g,alpha))
+                canv.drawImage(ImageReader(mono),44,ph-83,width=140,height=43,mask='auto',preserveAspectRatio=True)
+            except Exception: pass
+        canv.setStrokeColor(colors.HexColor('#A0A0A0'));canv.line(197,ph-83,197,ph-41)
+        canv.setFillColor(colors.HexColor('#222222'));canv.setFont('Helvetica-Bold',12);canv.drawString(211,ph-54,'ORDEN DE TRABAJO INTERNA')
+        canv.setFont('Helvetica',9);canv.drawString(211,ph-69,'DIVISIÓN MAESTRANZA  |  '+doc.numero)
+        canv.setStrokeColor(colors.HexColor('#CCCCCC'));canv.line(35,42,pw-35,42)
+        canv.setFont('Helvetica',7);canv.drawString(35,30,'INGEPRO · DIVISIÓN MAESTRANZA');canv.drawRightString(pw-35,30,f'Página {pdfdoc.page}')
+        canv.restoreState()
+    pdf.build(story,onFirstPage=pagina,onLaterPages=pagina)
+    buf.seek(0)
+    return send_file(buf,mimetype='application/pdf',as_attachment=False,download_name=doc.numero+'.pdf')
+
 with app.app_context(): db.create_all(); asegurar_columnas(); seed_maestros()
 if __name__=='__main__': app.run(host='0.0.0.0',port=int(os.environ.get('PORT',5000)),debug=True)

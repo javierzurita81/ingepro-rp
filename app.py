@@ -188,6 +188,28 @@ class OTComponente(db.Model):
     material=db.Column(db.String(80)); ubicacion=db.Column(db.String(120)); observacion=db.Column(db.Text)
     componente_modelo=db.relationship('ComponenteModelo')
 
+class GuiaDespacho(db.Model):
+    __tablename__='guia_despacho_interna'
+    id=db.Column(db.Integer,primary_key=True)
+    numero=db.Column(db.String(30),unique=True,index=True)
+    cliente=db.Column(db.String(120),nullable=False)
+    fecha=db.Column(db.Date,default=date.today,nullable=False)
+    transporte=db.Column(db.String(160))
+    estado=db.Column(db.String(20),default='Borrador',nullable=False)
+    creado_por=db.Column(db.Integer,db.ForeignKey('usuario.id'))
+    creado=db.Column(db.DateTime,default=datetime.utcnow)
+    actualizado=db.Column(db.DateTime,default=datetime.utcnow,onupdate=datetime.utcnow)
+    items=db.relationship('GuiaDespachoItem',backref='guia',cascade='all, delete-orphan',lazy=True)
+
+class GuiaDespachoItem(db.Model):
+    __tablename__='guia_despacho_item'
+    id=db.Column(db.Integer,primary_key=True)
+    guia_id=db.Column(db.Integer,db.ForeignKey('guia_despacho_interna.id'),nullable=False,index=True)
+    ot_id=db.Column(db.Integer,db.ForeignKey('ot.id'),nullable=False,index=True)
+    componente_id=db.Column(db.Integer,db.ForeignKey('ot_componente.id'),nullable=False,index=True)
+    cantidad=db.Column(db.Integer,default=1,nullable=False)
+    __table_args__=(db.UniqueConstraint('guia_id','componente_id',name='uq_guia_componente'),)
+
 class DiagnosticoHallazgo(db.Model):
     id=db.Column(db.Integer, primary_key=True)
     ot_id=db.Column(db.Integer, db.ForeignKey('ot.id'), nullable=False, index=True)
@@ -1698,6 +1720,102 @@ def checklist_pdf(ot_id,cid):
     story.append(Paragraph('<b>Fecha:</b> '+(ultimo.fecha.strftime('%d-%m-%Y %H:%M') if ultimo else 'Pendiente'),styles['Normal']))
     doc.build(story); buf.seek(0)
     return send_file(buf,mimetype='application/pdf',as_attachment=True,download_name=f'Checklist_OT_{ot.numero}_Componente_{cid}.pdf')
+
+# V7.63: documento interno de despacho; no sustituye DTE del SII.
+def gd_disponibles(cliente,guia_id=None):
+    ocupados=db.session.query(GuiaDespachoItem.componente_id).join(GuiaDespacho).filter(GuiaDespacho.estado=='Despachada').all()
+    bloqueados={r[0] for r in ocupados}
+    if guia_id:
+        propia=db.session.query(GuiaDespachoItem.componente_id).join(GuiaDespacho).filter(GuiaDespacho.id==guia_id,GuiaDespacho.estado=='Despachada').all()
+        bloqueados.difference_update(r[0] for r in propia)
+    ots=OT.query.filter_by(cliente=cliente).order_by(OT.id.desc()).limit(250).all()
+    return [(ot,[c for c in ot.componentes_detalle if c.condicion_ingreso=='Recibido' and c.id not in bloqueados]) for ot in ots]
+
+@app.route('/guias-despacho')
+@permiso_required('despacho')
+def guias_despacho():
+    guias=GuiaDespacho.query.order_by(GuiaDespacho.id.desc()).limit(250).all()
+    return render_template('guias_despacho.html',guias=guias)
+
+@app.route('/guias-despacho/nueva',methods=['GET','POST'])
+@permiso_required('despacho')
+def guia_nueva():
+    clientes=sorted({o.cliente for o in OT.query.all() if o.cliente})
+    cliente=(request.values.get('cliente') or '').strip()
+    if request.method=='POST':
+        if cliente not in clientes: abort(400)
+        ids=set()
+        try: ids={int(x) for x in request.form.getlist('componentes')}
+        except ValueError: abort(400)
+        disponibles={c.id:(ot,c) for ot,cs in gd_disponibles(cliente) for c in cs}
+        if not ids or not ids.issubset(disponibles):
+            flash('Seleccione componentes disponibles de un mismo cliente.'); return redirect(url_for('guia_nueva',cliente=cliente))
+        fecha=date.fromisoformat(request.form.get('fecha') or date.today().isoformat())
+        guia=GuiaDespacho(cliente=cliente,fecha=fecha,transporte=(request.form.get('transporte') or '').strip()[:160],creado_por=usuario_actual().id)
+        db.session.add(guia); db.session.flush()
+        guia.numero=f'GD-{guia.id:06d}'
+        for cid in sorted(ids):
+            ot,c=disponibles[cid]; db.session.add(GuiaDespachoItem(guia_id=guia.id,ot_id=ot.id,componente_id=cid,cantidad=1))
+        db.session.commit(); audit('Guía creada',guia.numero)
+        flash('Guía guardada.'); return redirect(url_for('guia_editar',gid=guia.id))
+    grupos=gd_disponibles(cliente) if cliente in clientes else []
+    return render_template('guia_form.html',guia=None,clientes=clientes,cliente=cliente,grupos=grupos,seleccionados=set(),hoy=date.today().isoformat())
+
+@app.route('/guias-despacho/<int:gid>',methods=['GET','POST'])
+@permiso_required('despacho')
+def guia_editar(gid):
+    guia=db.session.get(GuiaDespacho,gid) or abort(404)
+    if request.method=='POST':
+        if guia.estado!='Borrador': abort(403)
+        try: ids={int(x) for x in request.form.getlist('componentes')}
+        except ValueError: abort(400)
+        disponibles={c.id:(ot,c) for ot,cs in gd_disponibles(guia.cliente) for c in cs}
+        if not ids or not ids.issubset(disponibles):
+            flash('Debe seleccionar componentes disponibles.'); return redirect(url_for('guia_editar',gid=gid))
+        guia.fecha=date.fromisoformat(request.form.get('fecha') or date.today().isoformat())
+        guia.transporte=(request.form.get('transporte') or '').strip()[:160]
+        guia.items.clear(); db.session.flush()
+        for cid in sorted(ids):
+            ot,c=disponibles[cid]; guia.items.append(GuiaDespachoItem(ot_id=ot.id,componente_id=cid,cantidad=1))
+        db.session.commit(); audit('Guía editada',guia.numero)
+        flash('Cambios guardados.'); return redirect(url_for('guia_editar',gid=gid))
+    grupos=gd_disponibles(guia.cliente) if guia.estado=='Borrador' else []
+    seleccionados={i.componente_id for i in guia.items}
+    return render_template('guia_form.html',guia=guia,clientes=[],cliente=guia.cliente,grupos=grupos,seleccionados=seleccionados,hoy=date.today().isoformat())
+
+@app.route('/guias-despacho/<int:gid>/estado',methods=['POST'])
+@permiso_required('despacho')
+def guia_estado(gid):
+    guia=db.session.get(GuiaDespacho,gid) or abort(404)
+    accion=request.form.get('accion')
+    if guia.estado!='Borrador' or accion not in ('Despachada','Anulada'): abort(403)
+    if accion=='Despachada':
+        ocupados={r[0] for r in db.session.query(GuiaDespachoItem.componente_id).join(GuiaDespacho).filter(GuiaDespacho.estado=='Despachada').all()}
+        if not guia.items or any(i.componente_id in ocupados for i in guia.items):
+            flash('Hay componentes ya despachados. Revise antes de confirmar.'); return redirect(url_for('guia_editar',gid=gid))
+    guia.estado=accion; db.session.commit(); audit('Estado guía',f'{guia.numero}: {accion}')
+    flash('Estado actualizado.'); return redirect(url_for('guia_editar',gid=gid))
+
+@app.route('/guias-despacho/<int:gid>/pdf')
+@permiso_required('despacho')
+def guia_pdf(gid):
+    guia=db.session.get(GuiaDespacho,gid) or abort(404)
+    buf=BytesIO(); doc=SimpleDocTemplate(buf,pagesize=A4,leftMargin=35,rightMargin=35,topMargin=35,bottomMargin=35)
+    styles=getSampleStyleSheet(); story=[]
+    story.append(Paragraph('<font color="#12577D"><b>INGEPRO · DIVISIÓN MAESTRANZA</b></font>',styles['Heading2']))
+    story.append(Paragraph('<b>COMPROBANTE INTERNO DE DESPACHO</b>',styles['Heading3']))
+    for k,v in [('N.º guía',guia.numero),('Fecha',guia.fecha.strftime('%d-%m-%Y')),('Cliente',guia.cliente),('Transporte / patente',guia.transporte or '—'),('Estado',guia.estado)]:
+        story.append(Paragraph(f'<b>{k}:</b> {xml_escape(str(v))}',styles['Normal']))
+    story.append(Spacer(1,14))
+    filas=[['OT INGEPRO','EQUIPO','COMPONENTE','CANT.']]
+    for item in sorted(guia.items,key=lambda x:(x.ot_id,x.componente_id)):
+        ot=db.session.get(OT,item.ot_id); c=db.session.get(OTComponente,item.componente_id)
+        filas.append([xml_escape(ot.numero if ot else '—'),Paragraph(xml_escape(ot.equipo if ot else '—'),styles['Normal']),Paragraph(xml_escape(c.nombre if c else '—'),styles['Normal']),str(item.cantidad)])
+    t=Table(filas,colWidths=[85,155,240,44],repeatRows=1,hAlign='LEFT')
+    t.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),colors.HexColor('#E6EFF5')),('GRID',(0,0),(-1,-1),.5,colors.HexColor('#B4C1CD')),('VALIGN',(0,0),(-1,-1),'MIDDLE'),('FONTSIZE',(0,0),(-1,-1),8),('TOPPADDING',(0,0),(-1,-1),7),('BOTTOMPADDING',(0,0),(-1,-1),7)]))
+    story.extend([t,Spacer(1,32),Paragraph('_________________________                       _________________________',styles['Normal']),Paragraph('Entrega INGEPRO                                                    Recibe conforme',styles['Normal']),Spacer(1,18),Paragraph('<font color="#64748B">Documento interno de entrega. No constituye guía de despacho electrónica tributaria del SII.</font>',styles['Normal'])])
+    doc.build(story); buf.seek(0)
+    return send_file(buf,mimetype='application/pdf',as_attachment=True,download_name=f'{guia.numero}.pdf')
 
 @app.route('/maestros/componentes/<int:cid>/reparaciones',methods=['GET','POST'])
 @permiso_required('maestros')

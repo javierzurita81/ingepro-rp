@@ -733,7 +733,8 @@ def seguimiento_ot(ot):
     actividades=PlanActividad.query.filter_by(ot_id=ot.id).first() if aprobada else None
     plan=bool(actividades)
     reparacion=bool((ot.reparacion or '').strip())
-    calidad=bool((ot.control_calidad or '').strip() and (ot.checklist or '').strip())
+    recibidos=[c for c in ot.componentes_detalle if (c.condicion_ingreso or '').strip().casefold()=='recibido']
+    calidad=bool(recibidos) and all(salida_componente_liberado(ot,c.id) for c in recibidos)
     despacho=bool((ot.despacho or '').strip() and (ot.guia or '').strip())
     entrega=bool(ot.fecha_entrega_faena and (ot.recibido_por or '').strip())
     definiciones=[
@@ -743,8 +744,7 @@ def seguimiento_ot(ot):
       ('Envío cotización','Fecha y destinatario',enviada,'ver_cotizacion' if q else 'cotizacion_nueva','cotizaciones'),
       ('Aprobación','Autorización cliente',aprobada,'ver_cotizacion' if q else 'cotizacion_nueva','cotizaciones'),
       ('Planificación','Gantt compacto',plan,'planificacion_gantt','planificacion'),
-      ('Reparación','Trabajos por componente',reparacion,'ot_reparaciones','reparacion'),
-      ('Control calidad','Inspección y pruebas',calidad,'ver_ot','calidad'),
+      ('Informe de salida','Fotografías y medidas',calidad,'salida_ot','diagnostico'),
       ('Despacho','Guía y salida',despacho,'ver_ot','despacho'),
       ('Entregada','Fecha y recepción',entrega,'ver_ot','despacho')]
     pasos=[]
@@ -754,15 +754,14 @@ def seguimiento_ot(ot):
         if i==0: estado='completa'
         if endpoint=='ver_cotizacion' and q: href=url_for(endpoint,qid=q.id)
         elif endpoint=='cotizacion_nueva': href=url_for(endpoint,ot_id=ot.id)
-        elif endpoint in ('diagnostico_ot','ot_reparaciones'): href=url_for(endpoint,ot_id=ot.id)
+        elif endpoint in ('diagnostico_ot','ot_reparaciones','salida_ot'): href=url_for(endpoint,ot_id=ot.id)
         elif endpoint=='planificacion_gantt': href=url_for(endpoint,ot_id=ot.id)
-        else: href=url_for('ver_ot',ot_id=ot.id, _anchor='ot-'+('entrega' if i==9 else 'control' if i==7 else 'despacho' if i==8 else 'datos'))
+        else: href=url_for('ver_ot',ot_id=ot.id, _anchor='ot-'+('entrega' if i==8 else 'despacho' if i==7 else 'datos'))
         pasos.append(dict(nombre=nombre,descripcion=descripcion,completo=bool(hecho and previo),estado=estado,href=href,permitido=usuario_actual().puede(permiso)))
     if rechazada: condicion='Cotización rechazada'
     elif entrega: condicion='Entregada'
     elif despacho: condicion='Despachada'
     elif calidad: condicion='Lista para despacho'
-    elif reparacion: condicion='En reparación'
     elif plan: condicion='Planificada'
     elif aprobada: condicion='Aprobada'
     elif enviada: condicion='Cotización enviada'
@@ -777,6 +776,9 @@ def ver_ot(ot_id):
     ot=db.session.get(OT,ot_id) or abort(404)
     if es_supervisor(): return render_template('ot_supervisor.html',ot=ot)
     if request.method=='POST':
+        recibidos=[c for c in ot.componentes_detalle if (c.condicion_ingreso or '').strip().casefold()=='recibido']
+        if request.form.get('fecha_entrega_faena') and (not recibidos or not all(salida_componente_liberado(ot,c.id) for c in recibidos)):
+            flash('No se puede registrar la entrega: falta aprobar el Informe de salida de uno o más componentes.'); return redirect(url_for('ver_ot',ot_id=ot.id))
         for f in ['diagnostico','reparacion','control_calidad','checklist','embalaje','despacho']:
             if f in request.form:setattr(ot,f,request.form.get(f))
         for c in ot.componentes_detalle:
@@ -891,7 +893,7 @@ def diagnostico_ot(ot_id):
         if not condicion:
             flash('Debes indicar la condición encontrada.'); return redirect(url_for('diagnostico_ot',ot_id=ot.id))
         nombre,mime,datos=preparar_foto(next((f for f in (request.files.get('foto_camara'),request.files.get('foto_archivo'),request.files.get('foto')) if f and f.filename), None))
-        h=DiagnosticoHallazgo(ot_id=ot.id,ot_componente_id=comp.id if comp else None,zona=request.form.get('zona','').strip(),condicion=condicion,trabajo_recomendado=request.form.get('trabajo_recomendado','').strip(),observacion=request.form.get('observacion','').strip(),estado=request.form.get('estado','Pendiente'),foto_nombre=nombre,foto_mime=mime,foto_datos=datos,creado_por=usuario_actual().nombre)
+        h=DiagnosticoHallazgo(ot_id=ot.id,ot_componente_id=comp.id if comp else None,zona=request.form.get('zona','').strip(),condicion=condicion,trabajo_recomendado=medidas[0],observacion=request.form.get('observacion','').strip(),estado=medidas[1],foto_nombre=nombre,foto_mime=mime,foto_datos=datos,creado_por=usuario_actual().nombre)
         db.session.add(h); db.session.flush()
         for archivo in request.files.getlist('fotos_adicionales'):
             n,m,d=preparar_foto(archivo)
@@ -965,9 +967,11 @@ def diagnostico_editar(hid):
         condicion=request.form.get('condicion','').strip()
         if not condicion:
             flash('Debes indicar la condición encontrada.'); return redirect(url_for('diagnostico_editar',hid=h.id))
+        medidas,error=salida_medidas_form(request.form)
+        if error: flash(error); return redirect(url_for('salida_ot',ot_id=ot.id))
         h.ot_componente_id=comp.id if comp else None
         h.zona=request.form.get('zona','').strip(); h.condicion=condicion
-        h.trabajo_recomendado=request.form.get('trabajo_recomendado','').strip(); h.observacion=request.form.get('observacion','').strip(); h.estado=request.form.get('estado','Pendiente')
+        h.trabajo_recomendado=medidas[0]; h.observacion=request.form.get('observacion','').strip(); h.estado=medidas[1]
         if request.files.get('foto') and request.files['foto'].filename:
             nombre,mime,datos=preparar_foto(request.files.get('foto'))
             if datos: h.foto_nombre=nombre; h.foto_mime=mime; h.foto_datos=datos
@@ -1203,6 +1207,30 @@ def diagnostico_pdf(ot_id):
     audit('PDF diagnóstico generado',ot.numero)
     return send_file(buf,mimetype='application/pdf',as_attachment=True,download_name=f'Diagnostico-{ot.numero}.pdf')
 
+def salida_control_valido(h):
+    """Solo controles nuevos con evidencia, medición y conformidad documentada."""
+    return bool(h.foto_datos and (h.condicion or '').strip() and
+                (h.trabajo_recomendado or '').startswith('CONTROL DIMENSIONAL\n') and
+                h.estado == 'Conforme')
+
+def salida_componente_liberado(ot, componente_id):
+    controles=[h for h in ot.salidas if h.ot_componente_id==componente_id]
+    return bool(controles) and all(salida_control_valido(h) for h in controles)
+
+def salida_medidas_form(form):
+    campos=['nominal','minimo','maximo','real']
+    if not all((form.get(k) or '').strip() for k in campos):
+        return None, 'Complete las cuatro medidas en milímetros.'
+    try: v={k:float(form[k].replace(',','.')) for k in campos}
+    except ValueError: return None, 'Las medidas deben ser numéricas.'
+    if not all(math.isfinite(n) for n in v.values()) or v['minimo']>v['maximo']:
+        return None, 'Revise los límites de tolerancia.'
+    estado='Conforme' if v['minimo']<=v['real']<=v['maximo'] else 'No conforme'
+    texto=('CONTROL DIMENSIONAL\nMedida nominal: {nominal:g} mm\n'
+           'Límite mínimo: {minimo:g} mm\nLímite máximo: {maximo:g} mm\n'
+           'Medida real: {real:g} mm').format(**v)
+    return (texto,estado),None
+
 @app.route('/ot/<int:ot_id>/informe-salida', methods=['GET','POST'])
 @permiso_required('diagnostico')
 def salida_ot(ot_id):
@@ -1213,8 +1241,11 @@ def salida_ot(ot_id):
         if not comp or comp.ot_id!=ot.id or (comp.condicion_ingreso or '').strip().casefold()!='recibido': flash('Solo puede registrar hallazgos de componentes efectivamente recibidos en esta OT.'); return redirect(url_for('salida_ot',ot_id=ot.id))
         condicion=request.form.get('condicion','').strip()
         if not condicion:
-            flash('Debes indicar la condición encontrada.'); return redirect(url_for('salida_ot',ot_id=ot.id))
+            flash('Ingrese el comentario técnico de calidad.'); return redirect(url_for('salida_ot',ot_id=ot.id))
+        medidas,error=salida_medidas_form(request.form)
+        if error: flash(error); return redirect(url_for('salida_ot',ot_id=ot.id))
         nombre,mime,datos=preparar_foto(next((f for f in (request.files.get('foto_camara'),request.files.get('foto_archivo'),request.files.get('foto')) if f and f.filename), None))
+        if not datos: flash('La fotografía del control es obligatoria.'); return redirect(url_for('salida_ot',ot_id=ot.id))
         h=SalidaHallazgo(ot_id=ot.id,ot_componente_id=comp.id if comp else None,zona=request.form.get('zona','').strip(),condicion=condicion,trabajo_recomendado=request.form.get('trabajo_recomendado','').strip(),observacion=request.form.get('observacion','').strip(),estado=request.form.get('estado','Pendiente'),foto_nombre=nombre,foto_mime=mime,foto_datos=datos,creado_por=usuario_actual().nombre)
         db.session.add(h); db.session.flush()
         for archivo in request.files.getlist('fotos_adicionales'):
@@ -1289,9 +1320,11 @@ def salida_editar(hid):
         condicion=request.form.get('condicion','').strip()
         if not condicion:
             flash('Debes indicar la condición encontrada.'); return redirect(url_for('salida_editar',hid=h.id))
+        medidas,error=salida_medidas_form(request.form)
+        if error: flash(error); return redirect(url_for('salida_ot',ot_id=ot.id))
         h.ot_componente_id=comp.id if comp else None
         h.zona=request.form.get('zona','').strip(); h.condicion=condicion
-        h.trabajo_recomendado=request.form.get('trabajo_recomendado','').strip(); h.observacion=request.form.get('observacion','').strip(); h.estado=request.form.get('estado','Pendiente')
+        h.trabajo_recomendado=medidas[0]; h.observacion=request.form.get('observacion','').strip(); h.estado=medidas[1]
         if request.files.get('foto') and request.files['foto'].filename:
             nombre,mime,datos=preparar_foto(request.files.get('foto'))
             if datos: h.foto_nombre=nombre; h.foto_mime=mime; h.foto_datos=datos
@@ -1865,6 +1898,8 @@ def guia_nueva():
         disponibles={c.id:(ot,c) for ot,cs in gd_disponibles(cliente) for c in cs}
         if not ids or not ids.issubset(disponibles):
             flash('Seleccione componentes disponibles de un mismo cliente.'); return redirect(url_for('guia_nueva',cliente=cliente))
+        if any(not salida_componente_liberado(ot,c.id) for ot,c in disponibles.values() if c.id in ids):
+            flash('Debe completar el Informe de salida de todos los componentes seleccionados.'); return redirect(url_for('guia_nueva',cliente=cliente))
         fecha=date.fromisoformat(request.form.get('fecha') or date.today().isoformat())
         guia=GuiaDespacho(cliente=cliente,fecha=fecha,transporte=(request.form.get('transporte') or '').strip()[:160],creado_por=usuario_actual().id)
         db.session.add(guia); db.session.flush()
@@ -1887,6 +1922,8 @@ def guia_editar(gid):
         disponibles={c.id:(ot,c) for ot,cs in gd_disponibles(guia.cliente) for c in cs}
         if not ids or not ids.issubset(disponibles):
             flash('Debe seleccionar componentes disponibles.'); return redirect(url_for('guia_editar',gid=gid))
+        if any(not salida_componente_liberado(ot,c.id) for ot,c in disponibles.values() if c.id in ids):
+            flash('Falta Informe de salida conforme.'); return redirect(url_for('guia_editar',gid=gid))
         guia.fecha=date.fromisoformat(request.form.get('fecha') or date.today().isoformat())
         guia.transporte=(request.form.get('transporte') or '').strip()[:160]
         guia.items.clear(); db.session.flush()

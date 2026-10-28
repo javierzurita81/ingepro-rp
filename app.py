@@ -1519,7 +1519,88 @@ def cliente_ver(cid):
             x=ContactoCliente(cliente_id=c.id,nombre=request.form['contacto_nombre'].strip(),cargo=request.form.get('cargo','').strip(),email=request.form.get('contacto_email','').strip(),telefono=request.form.get('contacto_telefono','').strip(),recibe_cotizacion=bool(request.form.get('recibe_cotizacion')),puede_aprobar=bool(request.form.get('puede_aprobar')),recibe_diagnostico=bool(request.form.get('recibe_diagnostico')),recibe_informe_final=bool(request.form.get('recibe_informe_final')))
             db.session.add(x); db.session.commit(); audit('Contacto cliente creado',f'{c.nombre}: {x.nombre}'); flash('Contacto agregado.')
         return redirect(url_for('cliente_ver',cid=c.id))
-    return render_template('cliente_ver.html',cliente=c,formatear_rut=formatear_rut)
+    return render_template('cliente_ver.html',cliente=c,formatear_rut=formatear_rut,empresas=Cliente.query.filter_by(activo=True).order_by(Cliente.nombre).all())
+
+@app.route('/clientes/<int:cid>/editar', methods=['GET','POST'])
+@permiso_required('clientes')
+def cliente_editar(cid):
+    c=db.session.get(Cliente,cid) or abort(404)
+    if request.method=='POST':
+        nombre=request.form.get('nombre','').strip()
+        rut=normalizar_rut(request.form.get('rut'))
+        if not nombre or not rut_valido(rut):
+            flash('Indica una razón social y un RUT válido.')
+            return render_template('cliente_form.html',cliente=c)
+        duplicado=Cliente.query.filter(Cliente.id!=cid,db.or_(Cliente.nombre==nombre,Cliente.rut==rut)).first()
+        if duplicado:
+            flash('La razón social o RUT ya está registrado.')
+            return render_template('cliente_form.html',cliente=c)
+        for campo in ('nombre','nombre_comercial','direccion','comuna','ciudad','giro','telefono','email'):
+            setattr(c,campo,request.form.get(campo,'').strip())
+        c.rut=rut
+        db.session.commit(); audit('Empresa editada',f'{c.id} / {c.nombre}')
+        flash('Empresa actualizada.')
+        return redirect(url_for('cliente_ver',cid=cid))
+    return render_template('cliente_form.html',cliente=c)
+
+@app.route('/clientes/<int:cid>/eliminar',methods=['POST'])
+@permiso_required('clientes')
+def cliente_eliminar(cid):
+    if not usuario_actual().es_admin: abort(403)
+    c=db.session.get(Cliente,cid) or abort(404)
+    # No borrar empresas: las OT y cotizaciones históricas pueden conservar el nombre.
+    c.activo=False
+    for contacto in c.contactos: contacto.activo=False
+    db.session.commit(); audit('Empresa desactivada',f'{c.id} / {c.nombre}')
+    flash('Empresa desactivada. Su historial se conserva.')
+    return redirect(url_for('clientes'))
+
+@app.route('/clientes/<int:cid>/reactivar',methods=['POST'])
+@permiso_required('clientes')
+def cliente_reactivar(cid):
+    if not usuario_actual().es_admin: abort(403)
+    c=db.session.get(Cliente,cid) or abort(404)
+    c.activo=True; db.session.commit(); audit('Empresa reactivada',c.nombre)
+    flash('Empresa reactivada.')
+    return redirect(url_for('cliente_ver',cid=cid))
+
+@app.route('/clientes/<int:cid>/contactos/<int:contacto_id>/editar',methods=['POST'])
+@permiso_required('clientes')
+def contacto_editar(cid,contacto_id):
+    x=ContactoCliente.query.filter_by(id=contacto_id,cliente_id=cid).first_or_404()
+    nombre=request.form.get('contacto_nombre','').strip()
+    if not nombre:
+        flash('El nombre del contacto es obligatorio.')
+        return redirect(url_for('cliente_ver',cid=cid))
+    nuevo_cliente_id=request.form.get('cliente_id',type=int) or cid
+    destino=db.session.get(Cliente,nuevo_cliente_id)
+    if not destino or not destino.activo: abort(400)
+    x.cliente_id=nuevo_cliente_id; x.nombre=nombre
+    x.cargo=request.form.get('cargo','').strip()
+    x.email=request.form.get('contacto_email','').strip()
+    x.telefono=request.form.get('contacto_telefono','').strip()
+    for campo in ('recibe_cotizacion','puede_aprobar','recibe_diagnostico','recibe_informe_final'):
+        setattr(x,campo,campo in request.form)
+    db.session.commit(); audit('Contacto editado',f'{x.id} / {x.nombre}')
+    flash('Contacto actualizado.')
+    return redirect(url_for('cliente_ver',cid=nuevo_cliente_id))
+
+@app.route('/clientes/<int:cid>/contactos/<int:contacto_id>/eliminar',methods=['POST'])
+@permiso_required('clientes')
+def contacto_eliminar(cid,contacto_id):
+    if not usuario_actual().es_admin: abort(403)
+    x=ContactoCliente.query.filter_by(id=contacto_id,cliente_id=cid).first_or_404()
+    x.activo=False; db.session.commit(); audit('Contacto desactivado',f'{x.id} / {x.nombre}')
+    flash('Contacto desactivado; se conserva el historial.')
+    return redirect(url_for('cliente_ver',cid=cid))
+
+@app.route('/clientes/<int:cid>/contactos/<int:contacto_id>/reactivar',methods=['POST'])
+@permiso_required('clientes')
+def contacto_reactivar(cid,contacto_id):
+    if not usuario_actual().es_admin: abort(403)
+    x=ContactoCliente.query.filter_by(id=contacto_id,cliente_id=cid).first_or_404()
+    x.activo=True; db.session.commit(); audit('Contacto reactivado',x.nombre)
+    return redirect(url_for('cliente_ver',cid=cid))
 
 def prefijo_codigo(valor, largo):
     limpio=unicodedata.normalize('NFKD', (valor or '').upper()).encode('ascii','ignore').decode()

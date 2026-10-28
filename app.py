@@ -324,6 +324,11 @@ class OT(db.Model):
     cotizacion=db.Column(db.String(80)); aprobacion=db.Column(db.String(30), default='Pendiente'); reparacion=db.Column(db.Text); control_calidad=db.Column(db.Text)
     checklist=db.Column(db.String(120)); embalaje=db.Column(db.Text); despacho=db.Column(db.Text)
     fecha_comprometida=db.Column(db.Date)
+    fecha_envio_cliente=db.Column(db.Date)
+    ot_cliente=db.Column(db.String(120))
+    numero_parte=db.Column(db.String(120))
+    numero_identificacion=db.Column(db.String(120))
+    materialidad=db.Column(db.String(160))
     fecha_entrega_faena=db.Column(db.Date)
     recibido_por=db.Column(db.String(160))
     revisado_faena_por=db.Column(db.String(160))
@@ -460,7 +465,7 @@ def asegurar_columnas():
         cols={c['name'] for c in insp.get_columns('ot')}
         if 'fecha_comprometida' not in cols: db.session.execute(text('ALTER TABLE ot ADD COLUMN fecha_comprometida DATE'))
         if 'modelo_id' not in cols: db.session.execute(text('ALTER TABLE ot ADD COLUMN modelo_id INTEGER'))
-        for n,t in {'fecha_entrega_faena':'DATE','recibido_por':'VARCHAR(160)','revisado_faena_por':'VARCHAR(160)','fecha_envio_cotizacion':'DATE','enviado_por':'VARCHAR(160)','enviado_a':'VARCHAR(160)','recibido_bodega_por':'VARCHAR(160)','observaciones_admin':'TEXT'}.items():
+        for n,t in {'fecha_entrega_faena':'DATE','recibido_por':'VARCHAR(160)','revisado_faena_por':'VARCHAR(160)','fecha_envio_cotizacion':'DATE','enviado_por':'VARCHAR(160)','enviado_a':'VARCHAR(160)','recibido_bodega_por':'VARCHAR(160)','observaciones_admin':'TEXT','fecha_envio_cliente':'DATE','ot_cliente':'VARCHAR(120)','numero_parte':'VARCHAR(120)','numero_identificacion':'VARCHAR(120)','materialidad':'VARCHAR(160)'}.items():
             if n not in cols: db.session.execute(text(f'ALTER TABLE ot ADD COLUMN {n} {t}'))
     if 'cliente' in insp.get_table_names():
         cols={c['name'] for c in insp.get_columns('cliente')}
@@ -605,13 +610,24 @@ def exportar_ot_excel():
 
 @app.route('/usuarios')
 @permiso_required('usuarios')
-def usuarios(): return render_template('usuarios.html',usuarios=Usuario.query.order_by(Usuario.nombre).all())
+def usuarios():
+    filtro=request.args.get('estado','todos')
+    consulta=Usuario.query
+    if filtro=='activos': consulta=consulta.filter(Usuario.activo.is_(True))
+    elif filtro=='inactivos': consulta=consulta.filter(Usuario.activo.is_(False))
+    buscar=request.args.get('buscar','').strip()
+    if buscar:
+        patron=f'%{buscar}%'
+        consulta=consulta.filter(db.or_(Usuario.nombre.ilike(patron),Usuario.username.ilike(patron),Usuario.sigla.ilike(patron)))
+    return render_template('usuarios.html',usuarios=consulta.order_by(Usuario.nombre).all(),filtro=filtro,buscar=buscar)
 @app.route('/usuarios/nuevo',methods=['GET','POST'])
 @permiso_required('usuarios')
 def usuario_nuevo():
     if request.method=='POST':
         username=request.form['username'].strip().lower()
-        if Usuario.query.filter_by(username=username).first(): flash('Ese usuario ya existe.'); return render_template('usuario_form.html',permisos=PERMISOS)
+        if Usuario.query.filter(db.func.lower(Usuario.username)==username).first():
+            existente=Usuario.query.filter(db.func.lower(Usuario.username)==username).first()
+            flash(f'El usuario de acceso «{username}» ya existe ({"activo" if existente.activo else "inactivo"}). Revísalo en el listado de Usuarios.'); return redirect(url_for('usuarios',estado='todos',buscar=username))
         if len(request.form['password'])<8: flash('La contraseña debe tener al menos 8 caracteres.'); return render_template('usuario_form.html',permisos=PERMISOS)
         sigla=request.form.get('sigla','').strip().upper() or None; color=request.form.get('color','').strip() or None
         if sigla and Usuario.query.filter_by(sigla=sigla).first(): flash('La sigla ya está asignada a otro usuario.'); return render_template('usuario_form.html',permisos=PERMISOS,usuario=None)
@@ -647,11 +663,13 @@ def componentes_modelo(modelo_id):
 @app.route('/ot/nueva',methods=['GET','POST'])
 @permiso_required('ingreso')
 def nueva_ot():
-    clientes=Cliente.query.filter_by(activo=True).order_by(Cliente.nombre).all(); modelos=ModeloEquipo.query.filter_by(activo=True).order_by(ModeloEquipo.tipo,ModeloEquipo.marca,ModeloEquipo.modelo).all()
+    clientes=Cliente.query.filter(Cliente.activo.isnot(False)).order_by(Cliente.nombre).all(); modelos=ModeloEquipo.query.filter_by(activo=True).order_by(ModeloEquipo.tipo,ModeloEquipo.marca,ModeloEquipo.modelo).all()
     if request.method=='POST':
         cliente=db.session.get(Cliente,int(request.form['cliente_id'])) or abort(404); modelo=db.session.get(ModeloEquipo,int(request.form['modelo_id'])) or abort(404)
+        if cliente.activo is False:
+            flash('La empresa está desactivada. Reactívala en Clientes antes de crear la OT.'); return redirect(url_for('nueva_ot'))
         recibidos=set(request.form.getlist('componentes_recibidos'))
-        ot=OT(numero=next_number(),modelo_id=modelo.id,cliente=cliente.nombre,equipo=f'{modelo.tipo} {modelo.marca} {modelo.modelo}',componente='Pendiente detalle',serie=request.form.get('serie'),guia=request.form.get('guia'),recibido_bodega_por=(usuario_actual().nombre if usuario_actual() else None))
+        ot=OT(numero=next_number(),modelo_id=modelo.id,cliente=cliente.nombre,equipo=f'{modelo.tipo} {modelo.marca} {modelo.modelo}',componente='Pendiente detalle',serie=request.form.get('serie'),guia=request.form.get('guia'),ot_cliente=request.form.get('ot_cliente','').strip(),numero_parte=request.form.get('numero_parte','').strip(),numero_identificacion=request.form.get('numero_identificacion','').strip(),materialidad=(modelo.materialidad or '').strip() or ' / '.join(sorted({(c.material_default or '').strip() for c in modelo.componentes if c.material_default})),fecha_envio_cliente=date.fromisoformat(request.form['fecha_envio_cliente']),recibido_bodega_por=(usuario_actual().nombre if usuario_actual() else None))
         db.session.add(ot); db.session.flush()
         nombres=[]
         for c in modelo.componentes:
@@ -772,6 +790,21 @@ def ver_ot(ot_id):
             try: ot.fecha_entrega_faena=date.fromisoformat(raw) if raw else None
             except ValueError:
                 db.session.rollback(); flash('Fecha de entrega en faena inválida.'); return redirect(url_for('ver_ot',ot_id=ot.id))
+        if 'datos_ingreso' in request.form:
+            cliente_id=request.form.get('cliente_id',type=int)
+            empresa=db.session.get(Cliente,cliente_id) if cliente_id else None
+            if not empresa:
+                flash('Selecciona una empresa registrada.'); return redirect(url_for('ver_ot',ot_id=ot.id))
+            if empresa.activo is False and empresa.nombre!=ot.cliente:
+                flash('No se puede asignar una empresa desactivada.'); return redirect(url_for('ver_ot',ot_id=ot.id))
+            ot.cliente=empresa.nombre
+            raw=request.form.get('fecha_envio_cliente','').strip()
+            try: ot.fecha_envio_cliente=date.fromisoformat(raw) if raw else None
+            except ValueError:
+                flash('Fecha de envío del cliente inválida.'); return redirect(url_for('ver_ot',ot_id=ot.id))
+            ot.ot_cliente=request.form.get('ot_cliente','').strip()[:120]
+            ot.numero_parte=request.form.get('numero_parte','').strip()[:120]
+            ot.numero_identificacion=request.form.get('numero_identificacion','').strip()[:120]
         if 'guia' in request.form: ot.guia=request.form.get('guia','').strip()[:80]
         if 'enviado_por' in request.form: ot.enviado_por=request.form.get('enviado_por','').strip()[:160]
         if 'revisado_faena_por' in request.form: ot.revisado_faena_por=request.form.get('revisado_faena_por','').strip()[:160]
@@ -783,7 +816,8 @@ def ver_ot(ot_id):
             cargar_despiece_ot(ot,modelo); db.session.commit()
     modelos=ModeloEquipo.query.filter_by(activo=True).order_by(ModeloEquipo.tipo,ModeloEquipo.marca,ModeloEquipo.modelo).all()
     pasos,condicion,q=seguimiento_ot(ot)
-    return render_template('ot.html',ot=ot,modelos=modelos,pasos=pasos,condicion=condicion,cot_activa=q)
+    clientes=Cliente.query.filter(db.or_(Cliente.activo.is_(True),Cliente.nombre==ot.cliente)).order_by(Cliente.nombre).all()
+    return render_template('ot.html',ot=ot,modelos=modelos,clientes=clientes,pasos=pasos,condicion=condicion,cot_activa=q)
 
 
 @app.route('/ot/<int:ot_id>/agregar-componentes', methods=['POST'])

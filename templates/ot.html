@@ -23,10 +23,10 @@
 <label>Tipo de equipo<input value="{{ot.modelo_equipo.tipo if ot.modelo_equipo else ot.equipo}}" readonly></label>
 <label>Marca<input value="{{ot.modelo_equipo.marca if ot.modelo_equipo else '—'}}" readonly></label>
 <label>Modelo<input value="{{ot.modelo_equipo.modelo if ot.modelo_equipo else '—'}}" readonly></label>
-<label>Materialidad<input value="{{ot.materialidad or (ot.modelo_equipo.materialidad if ot.modelo_equipo else '') or 'Sin registro histórico'}}" readonly></label>
+<label>Materialidad<input value="{{ot.materialidad or (ot.modelo_equipo.materialidad if ot.modelo_equipo else '') or ' / '.join(ot.componentes_detalle|map(attribute='material')|reject('none')|unique|list) or 'Sin registro histórico'}}" readonly></label>
 <label>Fecha ingreso OT<input value="{{ot.fecha.strftime('%d/%m/%Y %H:%M') if ot.fecha else '—'}}" readonly></label>
 <label>Fecha envío cliente *<input type="date" name="fecha_envio_cliente" required value="{{ot.fecha_envio_cliente.isoformat() if ot.fecha_envio_cliente else ''}}"></label>
-<label>Nombre cliente *<select name="cliente_id" required><option value="">Seleccionar...</option>{% for cliente in clientes %}<option value="{{cliente.id}}" {% if cliente.nombre==ot.cliente %}selected{% endif %}>{{cliente.nombre}}</option>{% endfor %}</select></label>
+<label>Nombre cliente *<select name="cliente_id" required><option value="">Seleccionar...</option>{% for cliente in clientes %}<option value="{{cliente.id}}" {% if cliente.nombre==ot.cliente %}selected{% endif %}>{{cliente.nombre}}{{" (inactiva)" if cliente.activo is false else ""}}</option>{% endfor %}</select></label>
 <label>OT cliente<input name="ot_cliente" value="{{ot.ot_cliente or ''}}" maxlength="120"></label>
 <label>Guía despacho *<input name="guia" value="{{ot.guia or ''}}" maxlength="80" required></label>
 <label>Número de parte<input name="numero_parte" value="{{ot.numero_parte or ''}}" maxlength="120"></label>

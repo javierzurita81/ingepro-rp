@@ -2596,10 +2596,11 @@ def cargar_cotizacion_form(q, form):
     except: q.descuento_pct=0
     vh=form.get('validez_hasta'); q.validez_hasta=datetime.strptime(vh,'%Y-%m-%d').date() if vh else None
     anteriores={l.descripcion.strip() for l in q.lineas}
-    q.lineas.clear(); db.session.flush()
     descs=form.getlist('descripcion[]'); cants=form.getlist('cantidad[]'); precios=form.getlist('precio[]')
     ids=form.getlist('componente_id[]')
-    recibidos={str(c.id):c for c in q.ot.componentes_detalle if (c.condicion_ingreso or '').strip().casefold()=='recibido'}
+    ot=db.session.get(OT,q.ot_id) if q.ot_id else None
+    recibidos={str(c.id):c for c in (ot.componentes_detalle if ot else []) if (c.condicion_ingreso or '').strip().casefold()=='recibido'}
+    nuevas_lineas=[]
     for i,desc in enumerate(descs):
         if not desc.strip(): continue
         cid=ids[i] if i<len(ids) else ''
@@ -2607,7 +2608,9 @@ def cargar_cotizacion_form(q, form):
         if not cid and recibidos and desc.strip() not in anteriores: raise ValueError('Seleccione un componente recibido para cada nuevo servicio.')
         try: cant=float(cants[i] or 1); precio=int(float(precios[i] or 0))
         except: cant,precio=1,0
-        q.lineas.append(LineaCotizacion(descripcion=desc.strip(),cantidad=cant,precio_unitario=precio,orden=i))
+        nuevas_lineas.append(LineaCotizacion(descripcion=desc.strip(),cantidad=cant,precio_unitario=precio,orden=i))
+    q.lineas.clear()
+    q.lineas.extend(nuevas_lineas)
 
 @app.route('/cotizaciones')
 @permiso_required('cotizaciones')

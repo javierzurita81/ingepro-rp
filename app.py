@@ -2595,19 +2595,33 @@ def cargar_cotizacion_form(q, form):
     try: q.descuento_pct=max(0,min(float(form.get('descuento_pct') or 0),100))
     except: q.descuento_pct=0
     vh=form.get('validez_hasta'); q.validez_hasta=datetime.strptime(vh,'%Y-%m-%d').date() if vh else None
-    anteriores={l.descripcion.strip() for l in q.lineas}
-    q.lineas.clear(); db.session.flush()
-    descs=form.getlist('descripcion[]'); cants=form.getlist('cantidad[]'); precios=form.getlist('precio[]')
+    # Se toma el nombre directamente del componente recibido, sin textbox editable.
+    ot=db.session.get(OT,q.ot_id) if q.ot_id else None
+    recibidos={str(c.id):c for c in (ot.componentes_detalle if ot else [])
+               if (c.condicion_ingreso or '').strip().casefold()=='recibido'}
     ids=form.getlist('componente_id[]')
-    recibidos={str(c.id):c for c in q.ot.componentes_detalle if (c.condicion_ingreso or '').strip().casefold()=='recibido'}
-    for i,desc in enumerate(descs):
-        if not desc.strip(): continue
-        cid=ids[i] if i<len(ids) else ''
-        if cid and cid not in recibidos: raise ValueError('El componente seleccionado no está recibido en la OT.')
-        if not cid and recibidos and desc.strip() not in anteriores: raise ValueError('Seleccione un componente recibido para cada nuevo servicio.')
-        try: cant=float(cants[i] or 1); precio=int(float(precios[i] or 0))
-        except: cant,precio=1,0
-        q.lineas.append(LineaCotizacion(descripcion=desc.strip(),cantidad=cant,precio_unitario=precio,orden=i))
+    cants=form.getlist('cantidad[]')
+    precios=form.getlist('precio[]')
+    if not (len(ids)==len(cants)==len(precios)):
+        raise ValueError('Las líneas de cotización están incompletas.')
+    if not ids:
+        raise ValueError('Debe agregar al menos un componente recibido.')
+    nuevas=[]
+    for i,cid in enumerate(ids):
+        componente=recibidos.get(str(cid))
+        if componente is None:
+            raise ValueError('Seleccione un componente recibido válido en cada línea.')
+        try:
+            cant=float(str(cants[i]).replace(',','.'))
+            precio=float(str(precios[i]).replace(',','.'))
+        except (ValueError,TypeError):
+            raise ValueError('Revise la cantidad y el precio unitario.')
+        if not (0 < cant < 1e12 and 0 <= precio < 1e15):
+            raise ValueError('La cantidad o el precio unitario no son válidos.')
+        nuevas.append(LineaCotizacion(descripcion=componente.nombre.strip(),
+                      cantidad=cant,precio_unitario=round(precio),orden=i))
+    q.lineas.clear()
+    q.lineas.extend(nuevas)
 
 @app.route('/cotizaciones')
 @permiso_required('cotizaciones')

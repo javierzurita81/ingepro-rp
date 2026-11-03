@@ -893,7 +893,7 @@ def diagnostico_ot(ot_id):
         if not condicion:
             flash('Debes indicar la condición encontrada.'); return redirect(url_for('diagnostico_ot',ot_id=ot.id))
         nombre,mime,datos=preparar_foto(next((f for f in (request.files.get('foto_camara'),request.files.get('foto_archivo'),request.files.get('foto')) if f and f.filename), None))
-        h=DiagnosticoHallazgo(ot_id=ot.id,ot_componente_id=comp.id if comp else None,zona=request.form.get('zona','').strip(),condicion=condicion,trabajo_recomendado=medidas[0],observacion=request.form.get('observacion','').strip(),estado=medidas[1],foto_nombre=nombre,foto_mime=mime,foto_datos=datos,creado_por=usuario_actual().nombre)
+        h=DiagnosticoHallazgo(ot_id=ot.id,ot_componente_id=comp.id if comp else None,zona=request.form.get('zona','').strip(),condicion=condicion,trabajo_recomendado=request.form.get('trabajo_recomendado','').strip(),observacion=request.form.get('observacion','').strip(),estado=request.form.get('estado','Pendiente').strip() or 'Pendiente',foto_nombre=nombre,foto_mime=mime,foto_datos=datos,creado_por=usuario_actual().nombre)
         db.session.add(h); db.session.flush()
         for archivo in request.files.getlist('fotos_adicionales'):
             n,m,d=preparar_foto(archivo)
@@ -2596,11 +2596,10 @@ def cargar_cotizacion_form(q, form):
     except: q.descuento_pct=0
     vh=form.get('validez_hasta'); q.validez_hasta=datetime.strptime(vh,'%Y-%m-%d').date() if vh else None
     anteriores={l.descripcion.strip() for l in q.lineas}
+    q.lineas.clear(); db.session.flush()
     descs=form.getlist('descripcion[]'); cants=form.getlist('cantidad[]'); precios=form.getlist('precio[]')
     ids=form.getlist('componente_id[]')
-    ot=db.session.get(OT,q.ot_id) if q.ot_id else None
-    recibidos={str(c.id):c for c in (ot.componentes_detalle if ot else []) if (c.condicion_ingreso or '').strip().casefold()=='recibido'}
-    nuevas_lineas=[]
+    recibidos={str(c.id):c for c in q.ot.componentes_detalle if (c.condicion_ingreso or '').strip().casefold()=='recibido'}
     for i,desc in enumerate(descs):
         if not desc.strip(): continue
         cid=ids[i] if i<len(ids) else ''
@@ -2608,9 +2607,7 @@ def cargar_cotizacion_form(q, form):
         if not cid and recibidos and desc.strip() not in anteriores: raise ValueError('Seleccione un componente recibido para cada nuevo servicio.')
         try: cant=float(cants[i] or 1); precio=int(float(precios[i] or 0))
         except: cant,precio=1,0
-        nuevas_lineas.append(LineaCotizacion(descripcion=desc.strip(),cantidad=cant,precio_unitario=precio,orden=i))
-    q.lineas.clear()
-    q.lineas.extend(nuevas_lineas)
+        q.lineas.append(LineaCotizacion(descripcion=desc.strip(),cantidad=cant,precio_unitario=precio,orden=i))
 
 @app.route('/cotizaciones')
 @permiso_required('cotizaciones')

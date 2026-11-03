@@ -1,5 +1,5 @@
 from pathlib import Path
-import os, json, subprocess, tempfile, secrets, shutil, sqlite3, re, unicodedata, hashlib
+import os, json, subprocess, tempfile, secrets, shutil, sqlite3, re, unicodedata, hashlib, math
 from datetime import datetime, date, timedelta
 from functools import wraps
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session, abort, send_file

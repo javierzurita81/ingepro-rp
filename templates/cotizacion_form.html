@@ -8,9 +8,25 @@
 <label>Descuento (%)<input id="discount" name="descuento_pct" type="number" min="0" max="100" step="0.01" value="{{q.descuento_pct if q else 0}}"></label>
 <label class="wide">Inicio del plazo *<select name="inicio_plazo" required>{% for x in ['Recepción de OC / aprobación','Recepción física del componente','Recepción de materiales del cliente','Fecha acordada con cliente'] %}<option {% if q and q.inicio_plazo==x %}selected{% endif %}>{{x}}</option>{% endfor %}</select></label>
 <label class="wide">Referencia<input name="referencia" value="{{q.referencia if q else ''}}" placeholder="Ej: Informe diagnóstico / NT / solicitud cliente"></label></div>
-<h2>Líneas de cotización</h2><div class="quote-lines"><table id="lineas"><thead><tr><th>Producto / Servicio</th><th>Cantidad</th><th>Precio unitario</th><th>Importe</th><th></th></tr></thead><tbody>
-{% if q %}{% for l in q.lineas %}<tr><td><select class="componente-select" name="componente_id[]" aria-label="Componente recibido"><option value="">Seleccionar componente de la OT</option>{% for c in componentes_recibidos %}<option value="{{c.id}}" {% if c.nombre|lower in l.descripcion|lower %}selected{% endif %}>{{c.nombre}}</option>{% endfor %}</select><input name="descripcion[]" value="{{l.descripcion}}" required></td><td><input class="qty" name="cantidad[]" type="number" min="0" step="0.01" value="{{l.cantidad}}"></td><td><input class="price" name="precio[]" type="number" min="0" step="1" value="{{l.precio_unitario}}"></td><td class="line-total">$ 0</td><td><button type="button" class="iconbtn" onclick="this.closest('tr').remove();calc()">×</button></td></tr>{% endfor %}{% else %}{% for c in componentes_recibidos %}<tr><td><select class="componente-select" name="componente_id[]" required>{% for opt in componentes_recibidos %}<option value="{{opt.id}}" {% if opt.id==c.id %}selected{% endif %}>{{opt.nombre}}</option>{% endfor %}</select><input name="descripcion[]" value="REPARACIÓN {{c.nombre}}" required></td><td><input class="qty" name="cantidad[]" type="number" min="0" step="0.01" value="1"></td><td><input class="price" name="precio[]" type="number" min="0" step="1" value="0"></td><td class="line-total">$ 0</td><td><button type="button" class="iconbtn" onclick="this.closest('tr').remove();calc()">×</button></td></tr>{% endfor %}{% endif %}
-{% if not componentes_recibidos %}<tr><td colspan="5" class="muted">No hay componentes marcados como recibidos en el despiece de la OT. Revise su recepción antes de cotizar.</td></tr>{% endif %}
+<h2>Líneas de cotización</h2><div class="quote-lines">
+<table id="lineas"><thead><tr><th>Componente recibido</th><th>Cantidad</th><th>Precio unitario</th><th>Importe</th><th></th></tr></thead><tbody>
+{% if q %}
+{% for l in q.lineas %}
+<tr><td><select class="componente-select" name="componente_id[]" required>
+<option value="" {% if not l.descripcion %}selected{% endif %} disabled>Seleccione componente</option>
+{% for c in componentes_recibidos %}
+<option value="{{c.id}}" {% if c.nombre|trim|lower == l.descripcion|trim|lower or ('REPARACIÓN ' ~ c.nombre)|lower == l.descripcion|trim|lower %}selected{% endif %}>{{c.nombre}}</option>
+{% endfor %}
+</select></td><td><input class="qty" name="cantidad[]" type="number" min="0.01" step="0.01" value="{{l.cantidad}}" required></td><td><input class="price" name="precio[]" type="number" min="0" step="1" value="{{l.precio_unitario}}" required></td><td class="line-total">$ 0</td><td><button type="button" class="iconbtn" onclick="this.closest('tr').remove();calc()">×</button></td></tr>
+{% endfor %}
+{% else %}
+{% for c in componentes_recibidos %}
+<tr><td><select class="componente-select" name="componente_id[]" required>
+{% for opt in componentes_recibidos %}<option value="{{opt.id}}" {% if opt.id==c.id %}selected{% endif %}>{{opt.nombre}}</option>{% endfor %}
+</select></td><td><input class="qty" name="cantidad[]" type="number" min="0.01" step="0.01" value="1" required></td><td><input class="price" name="precio[]" type="number" min="0" step="1" value="0" required></td><td class="line-total">$ 0</td><td><button type="button" class="iconbtn" onclick="this.closest('tr').remove();calc()">×</button></td></tr>
+{% endfor %}
+{% endif %}
+{% if not componentes_recibidos %}<tr><td colspan="5" class="muted">No hay componentes recibidos registrados en esta OT.</td></tr>{% endif %}
 </tbody></table><button type="button" class="linkbtn" onclick="addLine()">+ Agregar producto / servicio</button></div>
 <label>Notas / condiciones<textarea name="notas" rows="4">{{q.notas if q else ''}}</textarea></label></section>
 <aside class="card totals"><h3>TOTALES</h3><div><span>Subtotal</span><b id="subtotal">$ 0</b></div><div><span>Descuento</span><b id="descuento">$ 0</b></div><div><span>Neto</span><b id="neto">$ 0</b></div><div><span>IVA 19%</span><b id="iva">$ 0</b></div><div class="grand"><span>Total</span><b id="total">$ 0</b></div><button class="btn" name="accion" value="guardar">Guardar presupuesto</button><button class="btn primary" name="accion" value="enviar">Guardar como enviado</button></aside></form>
@@ -18,16 +34,35 @@
 const componentes={{ componentes_recibidos|map(attribute='id')|list|tojson }};
 const nombres={{ componentes_recibidos|map(attribute='nombre')|list|tojson }};
 const money=n=>'$ '+Math.round(n).toLocaleString('es-CL');
-function calc(){let s=0;document.querySelectorAll('#lineas tbody tr').forEach(r=>{let q=parseFloat(r.querySelector('.qty')?.value||0),p=parseFloat(r.querySelector('.price')?.value||0),v=q*p;s+=v;let x=r.querySelector('.line-total');if(x)x.textContent=money(v)});let d=Math.max(0,Math.min(parseFloat(document.getElementById('discount')?.value||0),100)),dv=s*d/100,n=s-dv,i=n*.19;document.getElementById('subtotal').textContent=money(s);document.getElementById('descuento').textContent='- '+money(dv);document.getElementById('neto').textContent=money(n);document.getElementById('iva').textContent=money(i);document.getElementById('total').textContent=money(n+i)}
-function addLine(){
- if(!componentes.length){alert('Primero registre componentes recibidos en el despiece de la OT.');return;}
- const r=document.createElement('tr');
- r.innerHTML='<td><select class="componente-select" name="componente_id[]" required></select><input name="descripcion[]" placeholder="Descripción del trabajo" required></td><td><input class="qty" name="cantidad[]" type="number" min="0" step="0.01" value="1"></td><td><input class="price" name="precio[]" type="number" min="0" step="1" value="0"></td><td class="line-total">$ 0</td><td><button type="button" class="iconbtn" onclick="this.closest('tr').remove();calc()">×</button></td>';
- const sel=r.querySelector('select');componentes.forEach((id,i)=>sel.add(new Option(nombres[i],String(id))));
- sel.addEventListener('change',()=>{r.querySelector('[name="descripcion[]"]').value='REPARACIÓN '+nombres[sel.selectedIndex]});
- r.querySelector('[name="descripcion[]"]').value='REPARACIÓN '+nombres[0];
- document.querySelector('#lineas tbody').appendChild(r);bind();calc();
+function calc(){
+ let s=0;
+ document.querySelectorAll('#lineas tbody tr').forEach(r=>{
+   const qty=r.querySelector('.qty'),price=r.querySelector('.price');
+   if(!qty||!price)return;
+   const q=Number(qty.value)||0,p=Number(price.value)||0,v=q*p;
+   s+=v;
+   const cell=r.querySelector('.line-total');
+   if(cell)cell.textContent=money(v);
+ });
+ const d=Math.max(0,Math.min(Number(document.getElementById('discount').value)||0,100));
+ const dv=s*d/100,n=s-dv,i=n*.19;
+ document.getElementById('subtotal').textContent=money(s);
+ document.getElementById('descuento').textContent='- '+money(dv);
+ document.getElementById('neto').textContent=money(n);
+ document.getElementById('iva').textContent=money(i);
+ document.getElementById('total').textContent=money(n+i);
 }
-function bind(){document.querySelectorAll('.qty,.price,#discount').forEach(x=>x.oninput=calc)}bind();calc();
+function addLine(){
+ if(!componentes.length){alert('Primero registre componentes recibidos en la OT.');return;}
+ const r=document.createElement('tr');
+ r.innerHTML='<td><select class="componente-select" name="componente_id[]" required></select></td><td><input class="qty" name="cantidad[]" type="number" min="0.01" step="0.01" value="1" required></td><td><input class="price" name="precio[]" type="number" min="0" step="1" value="0" required></td><td class="line-total">$ 0</td><td><button type="button" class="iconbtn" onclick="this.closest(\'tr\').remove();calc()">×</button></td>';
+ const sel=r.querySelector('select');
+ componentes.forEach((id,i)=>sel.add(new Option(nombres[i],String(id))));
+ document.querySelector('#lineas tbody').appendChild(r);
+ calc();
+}
+document.getElementById('lineas').addEventListener('input',calc);
+document.getElementById('discount').addEventListener('input',calc);
+calc();
 </script>
 {% endblock %}

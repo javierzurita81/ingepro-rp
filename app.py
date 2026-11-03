@@ -2595,10 +2595,16 @@ def cargar_cotizacion_form(q, form):
     try: q.descuento_pct=max(0,min(float(form.get('descuento_pct') or 0),100))
     except: q.descuento_pct=0
     vh=form.get('validez_hasta'); q.validez_hasta=datetime.strptime(vh,'%Y-%m-%d').date() if vh else None
+    anteriores={l.descripcion.strip() for l in q.lineas}
     q.lineas.clear(); db.session.flush()
     descs=form.getlist('descripcion[]'); cants=form.getlist('cantidad[]'); precios=form.getlist('precio[]')
+    ids=form.getlist('componente_id[]')
+    recibidos={str(c.id):c for c in q.ot.componentes_detalle if (c.condicion_ingreso or '').strip().casefold()=='recibido'}
     for i,desc in enumerate(descs):
         if not desc.strip(): continue
+        cid=ids[i] if i<len(ids) else ''
+        if cid and cid not in recibidos: raise ValueError('El componente seleccionado no está recibido en la OT.')
+        if not cid and recibidos and desc.strip() not in anteriores: raise ValueError('Seleccione un componente recibido para cada nuevo servicio.')
         try: cant=float(cants[i] or 1); precio=int(float(precios[i] or 0))
         except: cant,precio=1,0
         q.lineas.append(LineaCotizacion(descripcion=desc.strip(),cantidad=cant,precio_unitario=precio,orden=i))
@@ -2622,13 +2628,16 @@ def cotizacion_nueva(ot_id):
         return redirect(url_for('diagnostico_ot',ot_id=ot.id))
     if request.method=='POST':
         q=Cotizacion(numero=next_quote_number(),ot_id=ot.id,cliente=ot.cliente,creada_por=usuario_actual().nombre)
-        cargar_cotizacion_form(q,request.form); db.session.add(q); db.session.commit()
+        try: cargar_cotizacion_form(q,request.form)
+        except ValueError as e:
+            db.session.rollback(); flash(str(e)); return redirect(request.url)
+        db.session.add(q); db.session.commit()
         ot.cotizacion=q.numero
         if request.form.get('accion')=='enviar': q.estado='Presupuesto enviado'; ot.estado='Cotización enviada'
         db.session.commit(); audit('Cotización creada',f'{q.numero} / {ot.numero}'); flash(f'{q.numero} creada correctamente')
         return redirect(url_for('ver_cotizacion',qid=q.id))
     sugerencias=[f'REPARACIÓN {x.strip().upper()}' for x in ot.componente.split(',')] if ot.componente and ot.componente!='Bomba completa' else ['REPARACIÓN BOMBA COMPLETA']
-    return render_template('cotizacion_form.html',ot=ot,sugerencias=sugerencias,q=None,modo='nueva')
+    return render_template('cotizacion_form.html',ot=ot,sugerencias=sugerencias,q=None,modo='nueva',componentes_recibidos=[c for c in ot.componentes_detalle if (c.condicion_ingreso or '').strip().casefold()=='recibido'])
 
 @app.route('/cotizacion/<int:qid>')
 @permiso_required('cotizaciones')
@@ -2642,11 +2651,13 @@ def editar_cotizacion(qid):
     q=db.session.get(Cotizacion,qid) or abort(404); ot=db.session.get(OT,q.ot_id)
     if q.estado=='Anulada': flash('Una cotización anulada no puede modificarse.'); return redirect(url_for('ver_cotizacion',qid=q.id))
     if request.method=='POST':
-        cargar_cotizacion_form(q,request.form)
+        try: cargar_cotizacion_form(q,request.form)
+        except ValueError as e:
+            db.session.rollback(); flash(str(e)); return redirect(request.url)
         if request.form.get('accion')=='enviar': q.estado='Presupuesto enviado'; ot.estado='Cotización enviada'
         db.session.commit(); audit('Cotización editada',q.numero); flash('Cotización actualizada correctamente.')
         return redirect(url_for('ver_cotizacion',qid=q.id))
-    return render_template('cotizacion_form.html',ot=ot,sugerencias=[],q=q,modo='editar')
+    return render_template('cotizacion_form.html',ot=ot,sugerencias=[],q=q,modo='editar',componentes_recibidos=[c for c in ot.componentes_detalle if (c.condicion_ingreso or '').strip().casefold()=='recibido'])
 
 @app.route('/cotizacion/<int:qid>/anular',methods=['POST'])
 @permiso_required('cotizaciones')

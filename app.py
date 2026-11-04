@@ -967,20 +967,33 @@ def diagnostico_editar(hid):
         condicion=request.form.get('condicion','').strip()
         if not condicion:
             flash('Debes indicar la condición encontrada.'); return redirect(url_for('diagnostico_editar',hid=h.id))
-        medidas,error=salida_medidas_form(request.form)
-        if error: flash(error); return redirect(url_for('salida_ot',ot_id=ot.id))
-        h.ot_componente_id=comp.id if comp else None
+        h.ot_componente_id=comp.id
         h.zona=request.form.get('zona','').strip(); h.condicion=condicion
-        h.trabajo_recomendado=medidas[0]; h.observacion=request.form.get('observacion','').strip(); h.estado=medidas[1]
-        if request.files.get('foto') and request.files['foto'].filename:
-            nombre,mime,datos=preparar_foto(request.files.get('foto'))
-            if datos: h.foto_nombre=nombre; h.foto_mime=mime; h.foto_datos=datos
+        h.trabajo_recomendado=request.form.get('trabajo_recomendado','').strip()
+        h.observacion=request.form.get('observacion','').strip()
+        h.estado=request.form.get('estado','Pendiente').strip() or 'Pendiente'
+        # Nuevas imágenes se agregan sin reemplazar ni borrar las existentes.
+        for campo in ('foto_camara','foto_archivo','foto'):
+            archivo=request.files.get(campo)
+            if archivo and archivo.filename:
+                n,m,d=preparar_foto(archivo)
+                if not d:
+                    flash('No se pudo procesar una fotografía. Use JPG, PNG o WEBP.')
+                    return redirect(url_for('diagnostico_ot',ot_id=ot.id))
+                if not h.foto_datos:
+                    h.foto_nombre=n; h.foto_mime=m; h.foto_datos=d
+                else:
+                    db.session.add(DiagnosticoFoto(hallazgo_id=h.id,nombre=n,mime=m,datos=d))
         for archivo in request.files.getlist('fotos_adicionales'):
-            n,m,d=preparar_foto(archivo)
-            if d: db.session.add(DiagnosticoFoto(hallazgo_id=h.id,nombre=n,mime=m,datos=d))
+            if archivo and archivo.filename:
+                n,m,d=preparar_foto(archivo)
+                if not d:
+                    flash('No se pudo procesar una fotografía adicional.')
+                    return redirect(url_for('diagnostico_ot',ot_id=ot.id))
+                db.session.add(DiagnosticoFoto(hallazgo_id=h.id,nombre=n,mime=m,datos=d))
         db.session.commit(); audit('Hallazgo diagnóstico editado',f'{ot.numero} / Hallazgo {h.id}')
         flash('Hallazgo actualizado.'); return redirect(url_for('diagnostico_ot',ot_id=ot.id))
-    return render_template('diagnostico_editar.html',ot=ot,h=h)
+    return render_template('diagnostico_editar.html',ot=ot,h=h,componentes_recibidos=[c for c in ot.componentes_detalle if (c.condicion_ingreso or '').strip().casefold()=='recibido'])
 
 @app.route('/diagnostico/hallazgo/<int:hid>/eliminar',methods=['POST'])
 @permiso_required('diagnostico')
@@ -1050,13 +1063,17 @@ def diagnostico_pdf(ot_id):
                             dibujo.line([(x+r,y-r),(x,y-r//2)],fill=color,width=grosor)
                             dibujo.line([(x+r,y-r),(x+r//2,y)],fill=color,width=grosor)
                     except (TypeError,ValueError,KeyError): continue
+            # V7.73: limitar resolución exclusivamente en el PDF de diagnóstico.
+            im.thumbnail((1000, 1000), PILImage.Resampling.LANCZOS)
             # Redondeo sutil aplicado sobre los píxeles de la fotografía.
             # Se conserva toda la imagen y su proporción; solo se suavizan las cuatro esquinas.
             radio=max(2, round(min(im.size)*0.012))
             mascara=PILImage.new('L',im.size,0)
             ImageDraw.Draw(mascara).rounded_rectangle((0,0,im.width-1,im.height-1),radius=radio,fill=255)
-            rgba=im.convert('RGBA'); rgba.putalpha(mascara)
-            salida=BytesIO(); rgba.save(salida,format='PNG',optimize=True)
+            # JPEG compacto con esquinas blancas para evitar PNG de gran tamaño.
+            fondo=PILImage.new('RGB',im.size,'white')
+            fondo.paste(im,(0,0),mascara)
+            salida=BytesIO(); fondo.save(salida,format='JPEG',quality=60,optimize=True)
             return salida.getvalue(),im.size
         except Exception: return None,None
     def imagen_con_pie(datos,marcas,numero):

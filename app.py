@@ -337,6 +337,7 @@ class OT(db.Model):
     enviado_a=db.Column(db.String(160))
     recibido_bodega_por=db.Column(db.String(160))
     observaciones_admin=db.Column(db.Text)
+    comentario_ingreso=db.Column(db.Text)
     modelo_equipo=db.relationship('ModeloEquipo')
     componentes_detalle=db.relationship('OTComponente', backref='ot', cascade='all, delete-orphan', lazy=True)
     salidas=db.relationship('SalidaHallazgo', backref='ot', cascade='all, delete-orphan', lazy=True, order_by='SalidaHallazgo.id')
@@ -355,7 +356,7 @@ def es_supervisor():
 
 # Seguridad del servidor: listado explícito de rutas permitidas para supervisión.
 # Todo endpoint nuevo queda BLOQUEADO por defecto hasta revisión.
-SUPERVISOR_GET={'index','control_general_ot','nueva_ot','ver_ot','diagnostico_ot',
+SUPERVISOR_GET={'diagnosticos_lista','informes_salida_lista','index','control_general_ot','nueva_ot','ver_ot','diagnostico_ot',
     'diagnostico_foto','diagnostico_foto_adicional','diagnostico_pdf',
     'diagnostico_editar','salida_ot','salida_foto','salida_foto_adicional','salida_pdf','salida_editar','produccion','planificacion_gantt','planificacion_gantt_pdf',
     'componentes_modelo','oti_lista','oti_seleccionar','oti_editar','oti_pdf','checklist_lista','checklist_componente','checklist_pdf','bosquejo_ver','logout','login','static'}
@@ -465,7 +466,7 @@ def asegurar_columnas():
         cols={c['name'] for c in insp.get_columns('ot')}
         if 'fecha_comprometida' not in cols: db.session.execute(text('ALTER TABLE ot ADD COLUMN fecha_comprometida DATE'))
         if 'modelo_id' not in cols: db.session.execute(text('ALTER TABLE ot ADD COLUMN modelo_id INTEGER'))
-        for n,t in {'fecha_entrega_faena':'DATE','recibido_por':'VARCHAR(160)','revisado_faena_por':'VARCHAR(160)','fecha_envio_cotizacion':'DATE','enviado_por':'VARCHAR(160)','enviado_a':'VARCHAR(160)','recibido_bodega_por':'VARCHAR(160)','observaciones_admin':'TEXT','fecha_envio_cliente':'DATE','ot_cliente':'VARCHAR(120)','numero_parte':'VARCHAR(120)','numero_identificacion':'VARCHAR(120)','materialidad':'VARCHAR(160)'}.items():
+        for n,t in {'fecha_entrega_faena':'DATE','recibido_por':'VARCHAR(160)','revisado_faena_por':'VARCHAR(160)','fecha_envio_cotizacion':'DATE','enviado_por':'VARCHAR(160)','enviado_a':'VARCHAR(160)','recibido_bodega_por':'VARCHAR(160)','observaciones_admin':'TEXT','comentario_ingreso':'TEXT','fecha_envio_cliente':'DATE','ot_cliente':'VARCHAR(120)','numero_parte':'VARCHAR(120)','numero_identificacion':'VARCHAR(120)','materialidad':'VARCHAR(160)'}.items():
             if n not in cols: db.session.execute(text(f'ALTER TABLE ot ADD COLUMN {n} {t}'))
     if 'cliente' in insp.get_table_names():
         cols={c['name'] for c in insp.get_columns('cliente')}
@@ -669,7 +670,7 @@ def nueva_ot():
         if cliente.activo is False:
             flash('La empresa está desactivada. Reactívala en Clientes antes de crear la OT.'); return redirect(url_for('nueva_ot'))
         recibidos=set(request.form.getlist('componentes_recibidos'))
-        ot=OT(numero=next_number(),modelo_id=modelo.id,cliente=cliente.nombre,equipo=f'{modelo.tipo} {modelo.marca} {modelo.modelo}',componente='Pendiente detalle',serie=request.form.get('serie'),guia=request.form.get('guia'),ot_cliente=request.form.get('ot_cliente','').strip(),numero_parte=request.form.get('numero_parte','').strip(),numero_identificacion=request.form.get('numero_identificacion','').strip(),materialidad=' / '.join(sorted({(c.material_default or '').strip() for c in modelo.componentes if c.activo is not False and c.material_default and (c.material_default or '').strip()})),fecha_envio_cliente=date.fromisoformat(request.form['fecha_envio_cliente']),recibido_bodega_por=(usuario_actual().nombre if usuario_actual() else None))
+        ot=OT(numero=next_number(),modelo_id=modelo.id,cliente=cliente.nombre,equipo=f'{modelo.tipo} {modelo.marca} {modelo.modelo}',componente='Pendiente detalle',serie=request.form.get('serie'),guia=request.form.get('guia'),ot_cliente=request.form.get('ot_cliente','').strip(),numero_parte=request.form.get('numero_parte','').strip(),numero_identificacion=request.form.get('numero_identificacion','').strip(),materialidad=' / '.join(sorted({(c.material_default or '').strip() for c in modelo.componentes if c.activo is not False and c.material_default and (c.material_default or '').strip()})),fecha_envio_cliente=date.fromisoformat(request.form['fecha_envio_cliente']),recibido_bodega_por=(usuario_actual().nombre if usuario_actual() else None),comentario_ingreso=request.form.get('comentario_ingreso','').strip()[:5000])
         db.session.add(ot); db.session.flush()
         nombres=[]
         for c in modelo.componentes:
@@ -807,6 +808,7 @@ def ver_ot(ot_id):
             ot.ot_cliente=request.form.get('ot_cliente','').strip()[:120]
             ot.numero_parte=request.form.get('numero_parte','').strip()[:120]
             ot.numero_identificacion=request.form.get('numero_identificacion','').strip()[:120]
+            ot.comentario_ingreso=request.form.get('comentario_ingreso','').strip()[:5000]
         if 'guia' in request.form: ot.guia=request.form.get('guia','').strip()[:80]
         if 'enviado_por' in request.form: ot.enviado_por=request.form.get('enviado_por','').strip()[:160]
         if 'revisado_faena_por' in request.form: ot.revisado_faena_por=request.form.get('revisado_faena_por','').strip()[:160]

@@ -1214,10 +1214,16 @@ def diagnostico_pdf(ot_id):
     t=Table([[[P('EVALUACIÓN TÉCNICA CONSOLIDADA','etiqueta'),Spacer(1,5),P(conclusion)]]],
             colWidths=[ancho],cornerRadii=[9,9,9,9]);tabla_estilo(t,suave,10);story.append(t)
     story.extend(seccion('06. Responsables del informe'))
-    firmas=Table([[[P('ELABORADO POR','etiqueta'),Spacer(1,28),HRFlowable(width='95%',thickness=.6,color=borde),
-                     Spacer(1,5),P('Técnico responsable · Nombre / Firma / Fecha','peque')],
-                   [P('REVISADO POR','etiqueta'),Spacer(1,28),HRFlowable(width='95%',thickness=.6,color=borde),
-                     Spacer(1,5),P('Área de Ingeniería · Nombre / Firma / Fecha','peque')]]],
+    # Autor registrado en el primer hallazgo del diagnóstico; no usar al usuario que descarga el PDF.
+    autores=sorted((h for h in hallazgos if (h.creado_por or '').strip()),
+                   key=lambda h: (h.creado or datetime.max, h.id))
+    elaborado_por=autores[0].creado_por.strip() if autores else 'Sin autor registrado'
+    firmas=Table([[[P('ELABORADO POR','etiqueta'),Spacer(1,8),P(elaborado_por,'normal'),
+                     Spacer(1,19),HRFlowable(width='95%',thickness=.6,color=borde),
+                     Spacer(1,5),P('Firma / Fecha','peque')],
+                   [P('RESPONSABLE TÉCNICO','etiqueta'),Spacer(1,8),P('JAVIER ZURITA ARAYA','normal'),
+                     P('Ingeniero Mecánico','peque'),Spacer(1,9),HRFlowable(width='95%',thickness=.6,color=borde),
+                     Spacer(1,5),P('Firma / Fecha','peque')]]],
                  colWidths=[ancho/2]*2,cornerRadii=[9,9,9,9]);tabla_estilo(firmas,colors.HexColor('#f0f4f8'),10)
     story.append(firmas)
     story.extend([Spacer(1,12),P('Este informe documenta las condiciones observadas durante el diagnóstico. Las reparaciones están sujetas a evaluación técnica, aprobación del alcance y condiciones contractuales aplicables.','peque')])

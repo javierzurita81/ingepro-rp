@@ -32,7 +32,7 @@
 <label>Número de parte<input name="numero_parte" value="{{ot.numero_parte or ''}}" maxlength="120"></label>
 <label>N.º identificación<input name="numero_identificacion" value="{{ot.numero_identificacion or ot.serie or ''}}" maxlength="120"></label>
 <label>Recibe INGEPRO<input value="{{ot.recibido_bodega_por or 'Sin registro histórico'}}" readonly></label>
-</div><button class="primary" type="submit">Guardar datos de ingreso</button></form></section>
+</div><label style="display:block;margin:12px 0">Comentario de ingreso (opcional)<textarea name="comentario_ingreso" rows="3" maxlength="5000" lang="es" spellcheck="true">{{ot.comentario_ingreso or ''}}</textarea></label><button class="primary" type="submit">Guardar datos de ingreso</button></form></section>
 <section class="card" style="margin:12px 0 18px"><h2>Agregar componentes recibidos a esta OT</h2>
 <p class="muted">Se incorporan al diagnóstico de la misma OT, sin borrar hallazgos ni componentes anteriores.</p>
 {% if ot.modelo_equipo %}

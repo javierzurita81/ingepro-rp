@@ -15,6 +15,7 @@
   <label>N.º identificación<input name="numero_identificacion" maxlength="120" placeholder="Opcional"></label>
   <label>Recibe INGEPRO *<input value="{{usuario_actual.nombre}}" readonly></label>
  </div>
+ <div style="margin:14px 0"><label>Comentario de ingreso (opcional)<textarea name="comentario_ingreso" rows="3" maxlength="5000" lang="es" spellcheck="true" placeholder="Observaciones sobre la recepción del equipo o sus componentes"></textarea></label></div>
  <div class="componentes"><b>Componentes físicamente recibidos *</b><small>Marca únicamente lo que ingresó a INGEPRO. Podrás incorporar más componentes después desde la OT.</small><div id="listaComponentes" class="checks"><span class="muted">Selecciona tipo, marca y modelo.</span></div></div>
  <button type="submit" class="primary">Generar OT de diagnóstico</button>
 </form>

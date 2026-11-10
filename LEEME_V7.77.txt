@@ -1,0 +1,10 @@
+INGEPRO RP V7.77 - EXPORTACION EXCEL DE REPARACIONES
+
+Archivos modificados: app.py, templates/maestros_equipos.html, templates/maestro_reparaciones.html
+
+Copie estos archivos a las mismas rutas del repositorio GitHub.
+No reemplace la base de datos ni elimine archivos existentes.
+El boton aparece en Maestro de Equipos y en el Maestro de Reparaciones.
+Exporta todas las etapas (activas e inactivas), sin modificar registros.
+La importacion y copia entre componentes NO estan implementadas en esta version.
+Validacion: sintaxis Python correcta; pendiente prueba funcional en Render.

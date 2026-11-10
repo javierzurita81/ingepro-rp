@@ -1705,6 +1705,70 @@ def codigo_equipo(m):
 def codigo_componente(c, m):
     return f'{prefijo_codigo(c.nombre,2)}-{prefijo_codigo(m.marca,3)}-{c.id:04d}'
 
+@app.route('/maestros/reparaciones/exportar-excel', methods=['GET'])
+@permiso_required('maestros')
+def maestro_reparaciones_exportar_excel():
+    """Respaldo de solo lectura de todas las reparaciones maestras existentes."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+    from openpyxl.utils import get_column_letter
+    from openpyxl.worksheet.table import Table as ExcelTable, TableStyleInfo
+
+    encabezados = ['ID equipo', 'Tipo de equipo', 'Marca', 'Modelo',
+                   'ID componente', 'Código componente', 'Componente',
+                   'Materialidad', 'ID reparación', 'Secuencia',
+                   'Reparación / etapa', 'Descripción', 'Proceso',
+                   'HH estimadas', 'Recurso / especialidad', 'Máquina', 'Estado']
+    wb = Workbook()
+    ws = wb.active
+    ws.title = 'Etapas de reparación'
+    ws.append(encabezados)
+    filas = (db.session.query(ModeloEquipo, ComponenteModelo, ReparacionMaestra)
+             .join(ComponenteModelo, ComponenteModelo.modelo_id == ModeloEquipo.id)
+             .join(ReparacionMaestra, ReparacionMaestra.componente_modelo_id == ComponenteModelo.id)
+             .order_by(ModeloEquipo.tipo, ModeloEquipo.marca, ModeloEquipo.modelo,
+                       ComponenteModelo.nombre, ReparacionMaestra.secuencia,
+                       ReparacionMaestra.id).all())
+    for equipo, componente, reparacion in filas:
+        ws.append([equipo.id, equipo.tipo, equipo.marca, equipo.modelo,
+                   componente.id, componente.codigo or '', componente.nombre,
+                   componente.material_default or '', reparacion.id,
+                   reparacion.secuencia if reparacion.secuencia is not None else 0,
+                   reparacion.nombre, reparacion.descripcion or '',
+                   reparacion.proceso or '',
+                   reparacion.hh_estimadas if reparacion.hh_estimadas is not None else 0,
+                   reparacion.recurso or '', reparacion.maquina or '',
+                   'Activa' if reparacion.activo else 'Inactiva'])
+    for cell in ws[1]:
+        cell.fill = PatternFill('solid', fgColor='233348')
+        cell.font = Font(color='FFFFFF', bold=True)
+        cell.alignment = Alignment(wrap_text=True, vertical='center')
+    ws.row_dimensions[1].height = 32
+    ws.freeze_panes = 'I2'
+    ws.auto_filter.ref = ws.dimensions
+    for i, ancho in enumerate([13,22,19,20,17,21,28,20,17,12,39,43,23,15,25,25,13], 1):
+        ws.column_dimensions[get_column_letter(i)].width = ancho
+    for fila in ws.iter_rows(min_row=2):
+        fila[13].number_format = '0.00'
+    info = wb.create_sheet('INSTRUCCIONES')
+    for texto in [
+        'INGEPRO RP V7.77 - RESPALDO DE REPARACIONES MAESTRAS',
+        'Exportación de solo lectura: no modifica la base de datos.',
+        'Incluye etapas activas e inactivas ya registradas manualmente.',
+        'Los ID identifican los registros existentes; consérvelos para futuras importaciones.',
+        'Esta versión solo EXPORTA. No existe aún importación automática de este archivo.',
+        'Si no hay etapas registradas, la hoja principal tendrá solo encabezados.'
+    ]: info.append([texto])
+    info.column_dimensions['A'].width = 105
+    info['A1'].font = Font(bold=True, size=13, color='233348')
+    salida = BytesIO()
+    wb.save(salida)
+    salida.seek(0)
+    return send_file(salida,
+                     mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                     as_attachment=True,
+                     download_name='INGEPRO_RP_Respaldo_Reparaciones_V7.77.xlsx')
+
 @app.route('/maestros/equipos',methods=['GET','POST'])
 @permiso_required('maestros')
 def maestros_equipos():

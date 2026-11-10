@@ -1,0 +1,1 @@
+V7.79: Reemplazar app.py y templates/maestro_reparaciones.html; agregar templates/maestro_reparaciones_copiar.html. NO subir carpeta INGEPRO_RP_V7.79 como subcarpeta del proyecto. Realizar respaldo PostgreSQL antes de instalar. Eliminación se realiza como desactivación reversible. No requiere migración de base de datos.

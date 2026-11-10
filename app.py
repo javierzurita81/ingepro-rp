@@ -2104,7 +2104,78 @@ def maestro_reparaciones(cid):
     if request.method=='POST':
         r=ReparacionMaestra(componente_modelo_id=c.id,nombre=request.form['nombre'].strip(),descripcion=request.form.get('descripcion','').strip(),proceso=request.form.get('proceso','').strip(),hh_estimadas=float(request.form.get('hh_estimadas') or 0),recurso=request.form.get('recurso','').strip(),maquina=request.form.get('maquina','').strip(),secuencia=int(request.form.get('secuencia') or 0))
         db.session.add(r); db.session.commit(); audit('Reparación maestra creada',f'{c.nombre}: {r.nombre}'); flash('Reparación agregada al componente.'); return redirect(url_for('maestro_reparaciones',cid=c.id))
-    return render_template('maestro_reparaciones.html',componente=c,reparaciones=ReparacionMaestra.query.filter_by(componente_modelo_id=c.id).order_by(ReparacionMaestra.secuencia,ReparacionMaestra.nombre).all())
+    return render_template('maestro_reparaciones.html',componente=c,reparaciones=ReparacionMaestra.query.filter_by(componente_modelo_id=c.id).order_by(ReparacionMaestra.secuencia,ReparacionMaestra.id).all(),origenes=ComponenteModelo.query.filter(ComponenteModelo.id!=c.id).order_by(ComponenteModelo.nombre,ComponenteModelo.id).all())
+
+# V7.79: operaciones seguras del maestro; nunca cambian componente_modelo_id de una etapa existente.
+@app.route('/maestros/componentes/<int:cid>/reparaciones/<int:rid>/editar', methods=['POST'])
+@permiso_required('maestros')
+def maestro_reparacion_editar(cid,rid):
+    r=ReparacionMaestra.query.filter_by(id=rid,componente_modelo_id=cid).first_or_404()
+    nombre=(request.form.get('nombre') or '').strip()
+    if not nombre:
+        flash('La etapa debe tener un nombre.')
+        return redirect(url_for('maestro_reparaciones',cid=cid))
+    try:
+        horas=float(request.form.get('hh_estimadas') or 0)
+        secuencia=int(request.form.get('secuencia') or 0)
+        if not math.isfinite(horas) or horas<0 or secuencia<0: raise ValueError()
+    except (ValueError,TypeError):
+        flash('Revise las horas y la secuencia.')
+        return redirect(url_for('maestro_reparaciones',cid=cid))
+    r.nombre=nombre[:180]
+    r.descripcion=(request.form.get('descripcion') or '').strip()
+    r.proceso=(request.form.get('proceso') or '').strip()[:100]
+    r.hh_estimadas=horas
+    r.secuencia=secuencia
+    r.recurso=(request.form.get('recurso') or '').strip()[:100]
+    r.maquina=(request.form.get('maquina') or '').strip()[:120]
+    db.session.commit()
+    audit('Etapa maestra editada',f'Componente {cid}, etapa {rid}')
+    flash('Etapa actualizada sin cambiar de componente.')
+    return redirect(url_for('maestro_reparaciones',cid=cid))
+
+@app.route('/maestros/componentes/<int:cid>/reparaciones/<int:rid>/eliminar', methods=['POST'])
+@permiso_required('maestros')
+def maestro_reparacion_eliminar(cid,rid):
+    r=ReparacionMaestra.query.filter_by(id=rid,componente_modelo_id=cid).first_or_404()
+    # Desactivación reversible: evita romper OT, planificación, checklist o producción.
+    r.activo=False
+    db.session.commit()
+    audit('Etapa maestra desactivada',f'Componente {cid}, etapa {rid}')
+    flash('Etapa desactivada. No se eliminó su historial; puede reactivarla.')
+    return redirect(url_for('maestro_reparaciones',cid=cid))
+
+@app.route('/maestros/componentes/<int:cid>/reparaciones/copiar',methods=['GET','POST'])
+@permiso_required('maestros')
+def maestro_reparaciones_copiar(cid):
+    destino=db.session.get(ComponenteModelo,cid) or abort(404)
+    origen_id=request.values.get('origen_id',type=int)
+    origen=db.session.get(ComponenteModelo,origen_id) if origen_id else None
+    if origen_id and (origen is None or origen.id==destino.id): abort(400)
+    etapas=ReparacionMaestra.query.filter_by(componente_modelo_id=origen.id,activo=True).order_by(ReparacionMaestra.secuencia,ReparacionMaestra.id).all() if origen else []
+    existentes={unicodedata.normalize('NFKD',(r.nombre or '').strip()).encode('ascii','ignore').decode().casefold():r for r in ReparacionMaestra.query.filter_by(componente_modelo_id=cid).all()}
+    if request.method=='POST':
+        if not origen: abort(400)
+        seleccionados=set(request.form.getlist('etapas'))
+        validos={str(r.id):r for r in etapas}
+        if not seleccionados or not seleccionados.issubset(validos):
+            flash('Seleccione etapas válidas del componente de origen.')
+            return redirect(url_for('maestro_reparaciones_copiar',cid=cid,origen_id=origen.id))
+        nuevos=0; omitidos=0
+        for rid in seleccionados:
+            r=validos[rid]
+            clave=unicodedata.normalize('NFKD',(r.nombre or '').strip()).encode('ascii','ignore').decode().casefold()
+            if clave in existentes:
+                omitidos+=1; continue
+            copia=ReparacionMaestra(componente_modelo_id=cid,nombre=r.nombre,descripcion=r.descripcion,proceso=r.proceso,hh_estimadas=r.hh_estimadas,recurso=r.recurso,maquina=r.maquina,secuencia=r.secuencia,activo=True)
+            db.session.add(copia)
+            existentes[clave]=copia
+            nuevos+=1
+        db.session.commit()
+        audit('Etapas copiadas entre componentes',f'Origen {origen.id}, destino {cid}, nuevas {nuevos}, omitidas {omitidos}')
+        flash(f'{nuevos} etapas copiadas; {omitidos} ya existían. Los originales no se modificaron.')
+        return redirect(url_for('maestro_reparaciones',cid=cid))
+    return render_template('maestro_reparaciones_copiar.html',destino=destino,origen=origen,etapas=etapas,existentes=existentes,origenes=ComponenteModelo.query.filter(ComponenteModelo.id!=cid).order_by(ComponenteModelo.nombre,ComponenteModelo.id).all())
 
 CPR_112A20_TAREAS = [
  'ARENADO Y PINTURA ANTICORROSIVA','RETIRO DE PERNOS CORTADOS',

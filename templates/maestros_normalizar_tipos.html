@@ -1,0 +1,14 @@
+{% extends 'base.html' %}
+{% block c %}
+<section style="max-width:1000px;margin:auto;background:#fff;padding:24px;border-radius:12px;color:#243447">
+<h2>INGEPRO RP · Unificar tipos de equipos</h2>
+<p>Vista previa: solo se actualizará el texto del tipo. Se conservarán identificadores, códigos, marcas, modelos, componentes, reparaciones y OT.</p>
+<p><strong>{{cambios|length}}</strong> modelos requieren normalización.</p>
+<table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:9px">Código / ID</th><th style="text-align:left">Marca · Modelo</th><th style="text-align:left">Tipo actual</th><th style="text-align:left">Nuevo tipo</th></tr></thead><tbody>
+{% for m in cambios %}<tr style="border-top:1px solid #ddd"><td style="padding:9px">{{m.id}}</td><td>{{m.marca}} · {{m.modelo}}</td><td>{{m.tipo}}</td><td><strong>{{normalizar_tipo_equipo(m.tipo)}}</strong></td></tr>{% endfor %}
+</tbody></table>
+{% if conflictos %}<p style="color:#b42318"><strong>Atención:</strong> existen {{conflictos|length}} pares de modelos con el mismo tipo, marca y modelo normalizados. No se permitirá ejecutar la unificación hasta revisarlos.</p>{% for a,b in conflictos %}<p>{{a.id}} / {{b.id}}: {{a.marca}} {{a.modelo}}</p>{% endfor %}{% endif %}
+{% if cambios and not conflictos %}<form method="post" onsubmit="return confirm('¿Confirmar la normalización de los tipos de equipos indicados?')"><label>Escriba UNIFICAR para confirmar: <input name="confirmacion" required autocomplete="off"></label><button class="btn primary" type="submit">Aplicar normalización</button></form>{% endif %}
+<a class="btn secondary" href="{{url_for('maestros_equipos')}}">Volver al Maestro</a>
+</section>
+{% endblock %}

@@ -2950,26 +2950,81 @@ class OTInterna(db.Model):
 
 
 def oti_origen(ot):
-    """Solo componentes recibidos y trabajos seleccionados o programados."""
+    """Etapas del Maestro de cada componente recibido, planificadas o no.
+
+    Excluye etapas expresamente marcadas No aplica y conserva asignaciones
+    adicionales que no están asociadas a una reparación maestra.
+    """
     resultado=[]
     for comp in ot.componentes_detalle:
-        if (comp.condicion_ingreso or '').strip().casefold()!='recibido': continue
-        selecciones=OTReparacionSeleccionada.query.filter_by(ot_id=ot.id,ot_componente_id=comp.id).all()
-        asignaciones=PlanActividad.query.filter_by(ot_id=ot.id,ot_componente_id=comp.id).order_by(PlanActividad.fecha_inicio,PlanActividad.id).all()
+        if (comp.condicion_ingreso or '').strip().casefold()!='recibido':
+            continue
+        excluidos={x.reparacion_maestra_id for x in PlanNoAplica.query.filter_by(
+            ot_id=ot.id,ot_componente_id=comp.id).all()}
+        asignaciones=PlanActividad.query.filter_by(
+            ot_id=ot.id,ot_componente_id=comp.id).order_by(
+            PlanActividad.fecha_inicio,PlanActividad.id).all()
         trabajos={}
-        for s in selecciones:
-            rep=db.session.get(ReparacionMaestra,s.reparacion_maestra_id)
-            if rep: trabajos['r'+str(rep.id)]={'nombre':rep.nombre,'instrucciones':rep.descripcion or '', 'horas':float(rep.hh_estimadas or 0),'responsable':'','estado':'Pendiente','origen':rep.id}
+        if comp.componente_modelo_id:
+            maestras=ReparacionMaestra.query.filter_by(
+                componente_modelo_id=comp.componente_modelo_id).order_by(
+                ReparacionMaestra.secuencia,ReparacionMaestra.id).all()
+            for rep in maestras:
+                if rep.activo is False or rep.id in excluidos:
+                    continue
+                trabajos['r'+str(rep.id)]={
+                    'nombre':rep.nombre,'instrucciones':rep.descripcion or '',
+                    'horas':0,'responsable':'','estado':'Pendiente','origen':rep.id}
         for a in asignaciones:
+            if a.reparacion_maestra_id in excluidos:
+                continue
             key='r'+str(a.reparacion_maestra_id) if a.reparacion_maestra_id else 'a'+str(a.id)
             if key not in trabajos:
-                trabajos[key]={'nombre':a.reparacion.nombre if a.reparacion else a.tarea,'instrucciones':'','horas':0,'responsable':'','estado':'Pendiente','origen':a.reparacion_maestra_id}
+                trabajos[key]={
+                    'nombre':a.reparacion.nombre if a.reparacion else a.tarea,
+                    'instrucciones':'','horas':0,'responsable':'',
+                    'estado':'Pendiente','origen':a.reparacion_maestra_id,
+                    'actividad_id':a.id if not a.reparacion_maestra_id else None}
             t=trabajos[key]
-            if a.responsable: t['responsable']=a.responsable.nombre
-            if not t['horas']: t['horas']=float((a.fecha_fin-a.fecha_inicio).days+1)*float(a.horas_dia or 0)
-            if a.observacion and not t['instrucciones']: t['instrucciones']=a.observacion
-        if trabajos: resultado.append({'componente_id':comp.id,'componente':comp.nombre,'etapas':list(trabajos.values())})
+            if a.responsable:
+                t['responsable']=a.responsable.nombre
+            t['horas']+=max(0,(a.fecha_fin-a.fecha_inicio).days+1)*float(a.horas_dia or 0)
+            if a.observacion and not t['instrucciones']:
+                t['instrucciones']=a.observacion
+        if trabajos:
+            resultado.append({'componente_id':comp.id,'componente':comp.nombre,
+                              'etapas':list(trabajos.values())})
     return resultado
+
+
+def oti_contenido_actualizado(doc):
+    """Incorpora etapas pendientes a OTI existentes sin perder ediciones."""
+    guardado=json.loads(doc.contenido_json or '[]')
+    actual=oti_origen(doc.ot)
+    anteriores={c.get('componente_id'):c for c in guardado}
+    for comp in actual:
+        viejo=anteriores.get(comp['componente_id'])
+        if not viejo:
+            continue
+        existentes={}
+        for etapa in viejo.get('etapas',[]):
+            clave=('r',etapa.get('origen')) if etapa.get('origen') else (
+                'a',etapa.get('actividad_id')) if etapa.get('actividad_id') else ('n',etapa.get('nombre'))
+            existentes[clave]=etapa
+        claves=set()
+        nuevas=[]
+        for etapa in comp['etapas']:
+            clave=('r',etapa.get('origen')) if etapa.get('origen') else (
+                'a',etapa.get('actividad_id')) if etapa.get('actividad_id') else ('n',etapa.get('nombre'))
+            claves.add(clave)
+            # Conservar las ediciones guardadas de etapas existentes.
+            nuevas.append(existentes.get(clave,etapa))
+        # Conservar etapas personalizadas existentes que no provienen del Maestro.
+        for clave,etapa in existentes.items():
+            if clave not in claves and clave[0]=='n':
+                nuevas.append(etapa)
+        comp['etapas']=nuevas
+    return actual
 
 @app.route('/ot-internas')
 @permiso_required('planificacion')
@@ -3024,7 +3079,7 @@ def oti_nueva(ot_id):
 @permiso_required('planificacion')
 def oti_editar(id):
     doc=db.session.get(OTInterna,id) or abort(404)
-    contenido=json.loads(doc.contenido_json or '[]')
+    contenido=oti_contenido_actualizado(doc)
     if request.method=='POST':
         for ci,c in enumerate(contenido):
             for ei,e in enumerate(c['etapas']):
@@ -3051,7 +3106,7 @@ def oti_pdf(id):
     from reportlab.platypus import KeepTogether
     from xml.sax.saxutils import escape
     doc=db.session.get(OTInterna,id) or abort(404)
-    contenido=json.loads(doc.contenido_json or '[]')
+    contenido=oti_contenido_actualizado(doc)
     buf=BytesIO()
     pdf=SimpleDocTemplate(buf,pagesize=A4,rightMargin=35,leftMargin=35,topMargin=103,bottomMargin=55,title=doc.numero)
     w=A4[0]-70
@@ -3072,7 +3127,7 @@ def oti_pdf(id):
             h=float(e.get('horas') or 0);total+=h
             desc=escape(e.get('instrucciones') or '')
             cell=Paragraph('<b>'+escape(e.get('nombre') or '')+'</b>'+(('<br/>'+desc) if desc else ''),normal)
-            rows.append([str(j),cell,Paragraph(escape(e.get('responsable') or 'SIN ASIGNAR'),small),f'{h:g}'])
+            rows.append([str(j),cell,Paragraph(escape(e.get('responsable') or 'S/P'),small),f'{h:g}' if e.get('responsable') else ''])
         table=Table(rows,colWidths=[w*.06,w*.61,w*.23,w*.10],repeatRows=1,hAlign='LEFT')
         table.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),colors.HexColor('#F1F1F1')),('LINEBELOW',(0,0),(-1,-1),.35,colors.HexColor('#D5D5D5')),('VALIGN',(0,0),(-1,-1),'TOP'),('LEFTPADDING',(0,0),(-1,-1),7),('RIGHTPADDING',(0,0),(-1,-1),5),('TOPPADDING',(0,0),(-1,-1),7),('BOTTOMPADDING',(0,0),(-1,-1),7)]))
         story.extend([KeepTogether([cab,table]),Spacer(1,10)])

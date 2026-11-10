@@ -1769,14 +1769,53 @@ def maestro_reparaciones_exportar_excel():
                      as_attachment=True,
                      download_name='INGEPRO_RP_Respaldo_Reparaciones_V7.77.xlsx')
 
+def normalizar_tipo_equipo(valor):
+    """Normaliza solo nombres de tipo; no altera marcas, modelos ni códigos."""
+    import unicodedata
+    limpio=' '.join((valor or '').strip().split())
+    clave=''.join(c for c in unicodedata.normalize('NFKD', limpio).casefold() if not unicodedata.combining(c))
+    if clave == 'bomba centrifuga':
+        return 'BOMBA CENTRÍFUGA'
+    return limpio
+
+@app.route('/maestros/equipos/normalizar-tipos', methods=['GET', 'POST'])
+@permiso_required('maestros')
+def maestros_normalizar_tipos():
+    if not usuario_actual().es_admin:
+        abort(403)
+    modelos=ModeloEquipo.query.order_by(ModeloEquipo.id).all()
+    cambios=[m for m in modelos if m.tipo != normalizar_tipo_equipo(m.tipo)]
+    # Verificar colisiones con la restricción única de la BD antes de escribir.
+    claves={}
+    conflictos=[]
+    for m in modelos:
+        clave=(normalizar_tipo_equipo(m.tipo).casefold(), m.marca.casefold(), m.modelo.casefold())
+        if clave in claves:
+            conflictos.append((claves[clave],m))
+        else:
+            claves[clave]=m
+    if request.method=='POST':
+        if request.form.get('confirmacion')!='UNIFICAR':
+            flash('Debe confirmar escribiendo UNIFICAR.')
+        elif conflictos:
+            flash('No se aplicaron cambios: existen modelos coincidentes que requieren revisión manual.')
+        else:
+            for m in cambios:
+                m.tipo=normalizar_tipo_equipo(m.tipo)
+            db.session.commit()
+            audit('Normalización de tipos de equipo',f'{len(cambios)} modelos actualizados sin alterar IDs ni códigos')
+            flash(f'Tipos normalizados: {len(cambios)} modelos. No se eliminaron registros.')
+            return redirect(url_for('maestros_equipos'))
+    return render_template('maestros_normalizar_tipos.html',cambios=cambios,conflictos=conflictos,normalizar_tipo_equipo=normalizar_tipo_equipo)
+
 @app.route('/maestros/equipos',methods=['GET','POST'])
 @permiso_required('maestros')
 def maestros_equipos():
     if request.method=='POST':
-        tipo=request.form.get('tipo','').strip(); marca=request.form.get('marca','').strip(); modelo=request.form.get('modelo','').strip()
+        tipo=normalizar_tipo_equipo(request.form.get('tipo','')); marca=request.form.get('marca','').strip(); modelo=request.form.get('modelo','').strip()
         if not all((tipo,marca,modelo)):
             flash('Complete tipo, marca y modelo.'); return redirect(url_for('maestros_equipos'))
-        existe=next((x for x in ModeloEquipo.query.all() if (x.tipo.casefold(),x.marca.casefold(),x.modelo.casefold())==(tipo.casefold(),marca.casefold(),modelo.casefold())),None)
+        existe=next((x for x in ModeloEquipo.query.all() if (normalizar_tipo_equipo(x.tipo).casefold(),x.marca.casefold(),x.modelo.casefold())==(tipo.casefold(),marca.casefold(),modelo.casefold())),None)
         if existe:
             flash('Ya existe ese tipo, marca y modelo.'); return redirect(url_for('maestro_modelo',mid=existe.id))
         m=ModeloEquipo(tipo=tipo,marca=marca,modelo=modelo)

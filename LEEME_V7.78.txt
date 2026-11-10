@@ -1,0 +1,15 @@
+INGEPRO RP V7.78 - SOLO ARCHIVOS MODIFICADOS
+
+1. Copiar app.py en la raiz del repositorio.
+2. Copiar templates/maestros_equipos.html a templates/.
+3. Agregar templates/maestros_normalizar_tipos.html a templates/.
+4. Desplegar en Render.
+5. Como Administrador: Maestro de Equipos > Unificar tipos.
+6. Revisar la vista previa y confirmar escribiendo UNIFICAR.
+
+IMPORTANTE:
+- No se eliminan modelos, componentes, OT ni reparaciones.
+- No se regeneran códigos ni IDs.
+- Si hay conflictos entre modelos equivalentes, la operación se bloquea.
+- Se normaliza específicamente 'Bomba centrífuga' y variantes sin tilde/mayúsculas a 'BOMBA CENTRÍFUGA'.
+- Realizar respaldo PostgreSQL antes de confirmar en producción.

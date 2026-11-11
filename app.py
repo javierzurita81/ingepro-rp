@@ -41,7 +41,7 @@ db = SQLAlchemy(app)
 PERMISOS = {
  'ingreso':'Ingreso de equipos', 'diagnostico':'Diagnóstico', 'cotizaciones':'Cotizaciones',
  'reparacion':'Reparación', 'calidad':'Control de calidad', 'despacho':'Embalaje y despacho',
- 'informes':'Informes', 'maestros':'Maestros', 'clientes':'Clientes y contactos', 'planificacion':'Planificación', 'produccion':'Control de producción (jefaturas)', 'usuarios':'Administración de usuarios'
+ 'informes':'Informes', 'ingenieria':'Ingeniería', 'maestros':'Maestros', 'clientes':'Clientes y contactos', 'planificacion':'Planificación', 'produccion':'Control de producción (jefaturas)', 'usuarios':'Administración de usuarios'
 }
 
 class Usuario(db.Model):
@@ -347,6 +347,26 @@ class OT(db.Model):
         estados=['Diagnóstico','Cotización enviada','Aprobada / Reparación','Control de calidad','Checklist / Embalaje','Despachada','Cerrada']
         try:return int((estados.index(self.estado)+1)/len(estados)*100)
         except:return 10
+
+
+# V7.80: informes de ingeniería independientes de la OT, sin modificar OT existentes.
+class InformeIngenieria(db.Model):
+    id=db.Column(db.Integer, primary_key=True)
+    ot_id=db.Column(db.Integer, db.ForeignKey('ot.id'), nullable=False, index=True)
+    fecha=db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    tipo=db.Column(db.String(30), nullable=False)
+    datos_json=db.Column(db.Text, nullable=False, default='{}')
+    foto1=db.Column(db.LargeBinary)
+    foto2=db.Column(db.LargeBinary)
+    estado=db.Column(db.String(20), nullable=False, default='VIGENTE')
+    creado_por_id=db.Column(db.Integer, db.ForeignKey('usuario.id'))
+    ot=db.relationship('OT')
+    @property
+    def numero(self): return f'ING-{self.id:06d}'
+    @property
+    def datos(self):
+        try: return json.loads(self.datos_json or '{}')
+        except (ValueError,TypeError): return {}
 
 def usuario_actual(): return db.session.get(Usuario, session.get('user_id')) if session.get('user_id') else None
 
@@ -3423,4 +3443,180 @@ def produccion_terminar(ot_id,comp_id,rep_id):
     return redirect(url_for('produccion',buscar=request.form.get('buscar','')))
 
 with app.app_context(): db.create_all(); asegurar_columnas(); seed_maestros()
+
+# ======================= INGENIERÍA V7.80 =======================
+ING_TIPOS=('VENTILADOR','IMPULSOR','ROTOR','EJE','POLEA')
+ING_CAMPOS=('correo','responsable','cargo','area','subarea','prioridad','descripcion','analista',
+ 'codigo_balance','tarjeta','peso_prueba','alabes','rpm','modo_falla','rms','peso_equipo',
+ 'planos','diametro','radio','apoyo','comentarios','norma','recomendacion','cierre',
+ 'desequilibrio_1','desequilibrio_2','desequilibrio_3','desequilibrio_permitido',
+ 'grado','masa_correccion','foto1_pie','foto2_pie','realizado_por','revisado_por',
+ 'aprobado_por','realizado_cargo','revisado_cargo','aprobado_cargo',
+ 'realizado_correo','revisado_correo','aprobado_correo',
+ 'realizado_telefono','revisado_telefono','aprobado_telefono')
+ING_ANALISTA={
+ 'nombre':'JAVIER ZURITA ARAYA', 'profesion':'INGENIERO MECÁNICO',
+ 'rut':'14.108.431-3', 'especialidad':'ANÁLISIS DE VIBRACIONES',
+ 'categoria':'CATEGORÍA I (NIVEL 1)', 'codigo':'3894-2026'}
+
+def ing_foto_optimizada(archivo):
+    if not archivo or not archivo.filename: return None
+    if (archivo.mimetype or '').lower() not in ('image/jpeg','image/png','image/webp'):
+        raise ValueError('SOLO SE ADMITEN FOTOGRAFÍAS JPG, PNG O WEBP.')
+    contenido=archivo.read(12*1024*1024+1)
+    if len(contenido)>12*1024*1024: raise ValueError('LA FOTOGRAFÍA SUPERA 12 MB.')
+    from PIL import UnidentifiedImageError
+    try:
+        im=PILImage.open(BytesIO(contenido)); im.verify()
+        im=PILImage.open(BytesIO(contenido)); im=ImageOps.exif_transpose(im)
+        if im.width*im.height>35000000: raise ValueError('LA IMAGEN ES DEMASIADO GRANDE.')
+        im.thumbnail((1600,1600)); im=im.convert('RGB')
+        buf=BytesIO(); im.save(buf,'JPEG',quality=78,optimize=True)
+        return buf.getvalue()
+    except (UnidentifiedImageError,OSError) as e: raise ValueError('ARCHIVO DE IMAGEN NO VÁLIDO.') from e
+
+@app.route('/ingenieria')
+@permiso_required('ingenieria')
+def ingenieria_lista():
+    buscar=(request.args.get('buscar') or '').strip()
+    q=InformeIngenieria.query.join(OT)
+    if buscar:
+        patron=f'%{buscar}%'
+        if buscar.upper().startswith('ING-') and buscar[4:].isdigit():
+            q=q.filter(InformeIngenieria.id==int(buscar[4:]))
+        else:
+            q=q.filter(db.or_(OT.numero.ilike(patron),OT.cliente.ilike(patron),OT.equipo.ilike(patron)))
+    return render_template('ingenieria_lista.html',informes=q.order_by(InformeIngenieria.id.desc()).limit(250).all(),buscar=buscar)
+
+@app.route('/ingenieria/nuevo',methods=['GET','POST'])
+@permiso_required('ingenieria')
+def ingenieria_nuevo():
+    ots=OT.query.order_by(OT.id.desc()).limit(500).all()
+    elegido=request.args.get('ot_id',type=int)
+    if request.method=='POST':
+        ot=db.session.get(OT,request.form.get('ot_id',type=int))
+        tipo=(request.form.get('tipo') or '').strip().upper()
+        if not ot or tipo not in ING_TIPOS:
+            flash('SELECCIONA UNA OT Y UN TIPO DE ELEMENTO VÁLIDOS.')
+            return render_template('ingenieria_form.html',informe=None,ots=ots,tipos=ING_TIPOS,datos=request.form,ot_elegida=elegido,analista=ING_ANALISTA)
+        datos={k:(request.form.get(k) or '').strip()[:5000] for k in ING_CAMPOS}
+        try:
+            foto1=ing_foto_optimizada(request.files.get('foto1'))
+            foto2=ing_foto_optimizada(request.files.get('foto2'))
+        except ValueError as e:
+            flash(str(e));return render_template('ingenieria_form.html',informe=None,ots=ots,tipos=ING_TIPOS,datos=datos,ot_elegida=ot.id,analista=ING_ANALISTA)
+        informe=InformeIngenieria(ot_id=ot.id,tipo=tipo,datos_json=json.dumps(datos,ensure_ascii=False),foto1=foto1,foto2=foto2,creado_por_id=usuario_actual().id)
+        db.session.add(informe);db.session.commit();audit('Informe ingeniería creado',informe.numero)
+        flash('INFORME CREADO CORRECTAMENTE.');return redirect(url_for('ingenieria_editar',iid=informe.id))
+    return render_template('ingenieria_form.html',informe=None,ots=ots,tipos=ING_TIPOS,datos={},ot_elegida=elegido,analista=ING_ANALISTA)
+
+@app.route('/ingenieria/<int:iid>/editar',methods=['GET','POST'])
+@permiso_required('ingenieria')
+def ingenieria_editar(iid):
+    informe=db.session.get(InformeIngenieria,iid) or abort(404)
+    if request.method=='POST':
+        if informe.estado=='ANULADO': abort(403)
+        tipo=(request.form.get('tipo') or '').strip().upper()
+        if tipo not in ING_TIPOS: flash('TIPO DE ELEMENTO NO VÁLIDO.');return redirect(request.url)
+        datos={k:(request.form.get(k) or '').strip()[:5000] for k in ING_CAMPOS}
+        try:
+            fotos={k:ing_foto_optimizada(request.files.get(k)) for k in ('foto1','foto2')}
+        except ValueError as e:
+            flash(str(e));return redirect(request.url)
+        informe.tipo=tipo;informe.datos_json=json.dumps(datos,ensure_ascii=False)
+        for k,v in fotos.items():
+            if v is not None: setattr(informe,k,v)
+            elif request.form.get('quitar_'+k)=='1': setattr(informe,k,None)
+        db.session.commit();audit('Informe ingeniería actualizado',informe.numero)
+        flash('INFORME GUARDADO.');return redirect(url_for('ingenieria_editar',iid=iid))
+    return render_template('ingenieria_form.html',informe=informe,ots=[informe.ot],tipos=ING_TIPOS,datos=informe.datos,ot_elegida=informe.ot_id,analista=ING_ANALISTA)
+
+@app.route('/ingenieria/<int:iid>/foto/<int:n>')
+@permiso_required('ingenieria')
+def ingenieria_foto(iid,n):
+    informe=db.session.get(InformeIngenieria,iid) or abort(404)
+    if n not in (1,2): abort(404)
+    foto=getattr(informe,f'foto{n}')
+    if not foto: abort(404)
+    resp=send_file(BytesIO(foto),mimetype='image/jpeg')
+    resp.headers['Cache-Control']='private, no-store'
+    return resp
+
+@app.route('/ingenieria/<int:iid>/anular',methods=['POST'])
+@permiso_required('ingenieria')
+def ingenieria_anular(iid):
+    if not usuario_actual().es_admin: abort(403)
+    informe=db.session.get(InformeIngenieria,iid) or abort(404)
+    informe.estado='ANULADO';db.session.commit();audit('Informe ingeniería anulado',informe.numero)
+    flash('INFORME ANULADO; EL NÚMERO SE CONSERVA.');return redirect(url_for('ingenieria_lista'))
+
+@app.route('/ingenieria/<int:iid>/pdf')
+@permiso_required('ingenieria')
+def ingenieria_pdf(iid):
+    informe=db.session.get(InformeIngenieria,iid) or abort(404)
+    d=informe.datos; ot=informe.ot
+    from reportlab.lib.enums import TA_CENTER
+    from reportlab.lib.utils import ImageReader
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib import colors as C
+    from reportlab.lib.units import mm
+    styles=getSampleStyleSheet()
+    normal=ParagraphStyle('ingNormal',parent=styles['Normal'],fontName='Helvetica',fontSize=8,leading=11,spaceAfter=0)
+    small=ParagraphStyle('ingSmall',parent=normal,fontSize=7,leading=9)
+    heading=ParagraphStyle('ingHeading',parent=normal,fontName='Helvetica-Bold',textColor=C.HexColor('#19344f'),fontSize=9,leading=12)
+    def p(v,sty=normal): return Paragraph(xml_escape(str(v or '—')).replace('\n','<br/>'),sty)
+    def tabla(pares):
+        rows=[[p(a,small),p(b,small)] for a,b in pares]
+        t=Table(rows,colWidths=[53*mm,125*mm],hAlign='LEFT')
+        t.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'TOP'),('BACKGROUND',(0,0),(0,-1),C.HexColor('#e9eef3')),('LINEBELOW',(0,0),(-1,-1),0.3,C.HexColor('#ccd5df')),('LEFTPADDING',(0,0),(-1,-1),6),('RIGHTPADDING',(0,0),(-1,-1),6),('TOPPADDING',(0,0),(-1,-1),4),('BOTTOMPADDING',(0,0),(-1,-1),4)]))
+        return t
+    def titulo(t): return [Spacer(1,4*mm),p(t,heading),Spacer(1,2*mm)]
+    def foto(blob):
+        if not blob:return p('SIN FOTOGRAFÍA',small)
+        im=PILImage.open(BytesIO(blob));w,h=im.size
+        escala=min(82*mm/w,62*mm/h)
+        return Image(BytesIO(blob),width=w*escala,height=h*escala)
+    story=[]
+    logo=Path(app.root_path)/'static'/'img'/'logo-ingepro.png'
+    if logo.exists():
+        try:
+            im=PILImage.open(logo);w,h=im.size;ratio=min(43*mm/w,15*mm/h)
+            story.append(Image(str(logo),width=w*ratio,height=h*ratio))
+        except OSError: pass
+    story += [p('INGEPRO | DIVISIÓN INGENIERÍA',heading),p('INFORME TÉCNICO DE BALANCEO DINÁMICO',heading),
+      p(f'N.º {informe.numero}  |  OT {ot.numero}  |  FECHA {informe.fecha.strftime("%d/%m/%Y")}  |  ESTADO {informe.estado}',small)]
+    story+=titulo('01. IDENTIFICACIÓN GENERAL')
+    story.append(tabla([('CLIENTE',ot.cliente),('EQUIPO / OT',ot.equipo),('ELEMENTO',informe.tipo),('DESCRIPCIÓN',d.get('descripcion') or ot.componente),('N.º TARJETA',d.get('tarjeta') or ot.serie),('ANALISTA',d.get('analista') or ING_ANALISTA['nombre']),('CÓDIGO BALANCEADORA',d.get('codigo_balance')),('MODO DE FALLA',d.get('modo_falla')),('RESPONSABLE CLIENTE',d.get('responsable')),('CORREO / ÁREA',f"{d.get('correo','')} / {d.get('area','')} / {d.get('subarea','')}"),('CARGO',d.get('cargo')),('PRIORIDAD',d.get('prioridad'))]))
+    story+=titulo('02. REGISTRO FOTOGRÁFICO')
+    ftab=Table([[foto(informe.foto1),foto(informe.foto2)],[p(d.get('foto1_pie') or 'FOTOGRAFÍA 01',small),p(d.get('foto2_pie') or 'FOTOGRAFÍA 02',small)]],colWidths=[89*mm,89*mm],hAlign='LEFT')
+    ftab.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'MIDDLE'),('ALIGN',(0,0),(-1,0),'CENTER'),('BOX',(0,0),(-1,-1),0.4,C.HexColor('#cbd5e1')),('INNERGRID',(0,0),(-1,-1),0.4,C.HexColor('#cbd5e1')),('TOPPADDING',(0,0),(-1,-1),5),('BOTTOMPADDING',(0,0),(-1,-1),5)]))
+    story.append(ftab)
+    story+=titulo('03. DATOS TÉCNICOS DE BALANCEO')
+    story.append(tabla([('PESO DEL ELEMENTO',d.get('peso_equipo')),('RPM / PLANOS',f"{d.get('rpm','')} / {d.get('planos','')}"),('DIÁMETRO / RADIO CORRECCIÓN',f"{d.get('diametro','')} / {d.get('radio','')}"),('N.º ÁLABES / PESO PRUEBA',f"{d.get('alabes','')} / {d.get('peso_prueba','')}"),('AMPLITUD RMS / APOYO',f"{d.get('rms','')} / {d.get('apoyo','')}")]))
+    story.append(PageBreak())
+    story += [p('INGEPRO | DIVISIÓN INGENIERÍA',heading),p(f'RESULTADOS Y CONCLUSIONES  |  {informe.numero}',heading)]
+    story+=titulo('04. RESULTADOS DE BALANCEO')
+    story.append(tabla([('DESEQUILIBRIO INICIAL',d.get('desequilibrio_1')),('DESEQUILIBRIO 2',d.get('desequilibrio_2')),('DESEQUILIBRIO 3',d.get('desequilibrio_3')),('DESEQUILIBRIO PERMISIBLE',d.get('desequilibrio_permitido')),('GRADO DE CALIDAD',d.get('grado')),('MASA DE CORRECCIÓN',d.get('masa_correccion'))]))
+    story+=titulo('05. COMENTARIOS Y NORMA')
+    story.extend([p(d.get('comentarios')),Spacer(1,2*mm),p('NORMA: '+(d.get('norma') or 'NO INDICADA'))])
+    story+=titulo('06. RECOMENDACIÓN Y CIERRE')
+    story.extend([p('RECOMENDACIÓN: '+(d.get('recomendacion') or '—')),Spacer(1,2*mm),p('CIERRE: '+(d.get('cierre') or '—'))])
+    story+=titulo('07. RESPONSABLE TÉCNICO')
+    story.append(tabla([('NOMBRE',ING_ANALISTA['nombre']),('PROFESIÓN',ING_ANALISTA['profesion']),('RUT',ING_ANALISTA['rut']),('CERTIFICACIÓN',f"ANALISTA DE VIBRACIONES {ING_ANALISTA['categoria']}"),('CÓDIGO DE CERTIFICACIÓN',ING_ANALISTA['codigo'])]))
+    story+=titulo('08. PERSONAL DE INSPECCIÓN')
+    for k,label in [('realizado','REALIZADO POR'),('revisado','REVISADO POR'),('aprobado','APROBADO POR')]:
+        story.append(p(f"{label}: {d.get(k+'_por') or '—'} | CARGO: {d.get(k+'_cargo') or '—'} | CORREO: {d.get(k+'_correo') or '—'} | TEL.: {d.get(k+'_telefono') or '—'}",small))
+        story.append(Spacer(1,3*mm))
+    def pie(canvas,doc):
+        canvas.saveState();canvas.setFont('Helvetica',7);canvas.setFillColor(C.HexColor('#64748b'))
+        canvas.drawString(16*mm,12*mm,'INGEPRO · INFORME DE INGENIERÍA')
+        canvas.drawRightString(194*mm,12*mm,f'PÁGINA {doc.page}')
+        canvas.restoreState()
+    buf=BytesIO()
+    pdf=SimpleDocTemplate(buf,pagesize=A4,leftMargin=16*mm,rightMargin=16*mm,topMargin=13*mm,bottomMargin=17*mm,title=f'INGEPRO {informe.numero}')
+    pdf.build(story,onFirstPage=pie,onLaterPages=pie)
+    buf.seek(0)
+    return send_file(buf,mimetype='application/pdf',as_attachment=False,download_name=f'INGEPRO_{informe.numero}.pdf')
+
+
 if __name__=='__main__': app.run(host='0.0.0.0',port=int(os.environ.get('PORT',5000)),debug=True)

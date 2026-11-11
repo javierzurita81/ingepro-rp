@@ -1,0 +1,8 @@
+{% extends 'base.html' %}{% block c %}
+<section class="ing-page"><div class="ing-top"><div><h1>MÓDULO DE INGENIERÍA</h1><p>INFORMES TÉCNICOS VINCULADOS A ÓRDENES DE TRABAJO</p></div><a class="ing-btn" href="{{url_for('ingenieria_nuevo')}}">+ NUEVO INFORME</a></div>
+<form method="get" class="ing-row"><input name="buscar" value="{{buscar}}" placeholder="BUSCAR N.º ING, OT O CLIENTE"><button class="ing-btn">BUSCAR</button></form>
+<div class="ing-scroll"><table class="ing-table"><thead><tr><th>INFORME</th><th>OT</th><th>CLIENTE</th><th>ELEMENTO</th><th>FECHA</th><th>ESTADO</th><th>ACCIONES</th></tr></thead><tbody>
+{% for i in informes %}<tr><td>{{i.numero}}</td><td>{{i.ot.numero}}</td><td>{{i.ot.cliente}}</td><td>{{i.tipo}}</td><td>{{i.fecha.strftime('%d/%m/%Y')}}</td><td>{{i.estado}}</td><td><a href="{{url_for('ingenieria_editar',iid=i.id)}}">VER / EDITAR</a> · <a target="_blank" href="{{url_for('ingenieria_pdf',iid=i.id)}}">PDF</a></td></tr>{% else %}<tr><td colspan="7">NO HAY INFORMES REGISTRADOS.</td></tr>{% endfor %}
+</tbody></table></div></section><style>
+.ing-page{max-width:1250px;margin:auto}.ing-top,.ing-row{display:flex;gap:12px;justify-content:space-between;align-items:center;flex-wrap:wrap}.ing-btn{display:inline-block;background:#203b56;color:white!important;padding:10px 15px;border:0;border-radius:7px;text-decoration:none;cursor:pointer}.ing-row{justify-content:flex-start;margin:16px 0}.ing-row input{min-width:280px;padding:10px}.ing-scroll{overflow:auto}.ing-table{width:100%;border-collapse:collapse;background:white}.ing-table td,.ing-table th{border-bottom:1px solid #dce3eb;padding:11px;text-align:left}.ing-table th{background:#203b56;color:white}
+</style>{% endblock %}

@@ -47,7 +47,7 @@ PERMISOS = {
 class Usuario(db.Model):
     id=db.Column(db.Integer, primary_key=True); username=db.Column(db.String(60), unique=True, nullable=False)
     nombre=db.Column(db.String(120), nullable=False); cargo=db.Column(db.String(100)); rut=db.Column(db.String(20)); email=db.Column(db.String(140)); sigla=db.Column(db.String(10), unique=True); color=db.Column(db.String(20), unique=True); password_hash=db.Column(db.String(255), nullable=False)
-    disponible_planificacion=db.Column(db.Boolean, default=False); rol=db.Column(db.String(30), default='Usuario'); permisos_json=db.Column(db.Text, default='[]'); activo=db.Column(db.Boolean, default=True)
+    ing_profesion=db.Column(db.String(100)); ing_categoria=db.Column(db.String(80)); ing_certificacion=db.Column(db.String(100)); ing_firma_autorizada=db.Column(db.Boolean,default=False); disponible_planificacion=db.Column(db.Boolean, default=False); rol=db.Column(db.String(30), default='Usuario'); permisos_json=db.Column(db.Text, default='[]'); activo=db.Column(db.Boolean, default=True)
     creado=db.Column(db.DateTime, default=datetime.utcnow); ultimo_acceso=db.Column(db.DateTime)
     def set_password(self,p): self.password_hash=generate_password_hash(p)
     def check_password(self,p): return check_password_hash(self.password_hash,p)
@@ -358,7 +358,10 @@ class InformeIngenieria(db.Model):
     datos_json=db.Column(db.Text, nullable=False, default='{}')
     foto1=db.Column(db.LargeBinary)
     foto2=db.Column(db.LargeBinary)
-    estado=db.Column(db.String(20), nullable=False, default='VIGENTE')
+    estado=db.Column(db.String(20), nullable=False, default='BORRADOR')
+    firmado_por_id=db.Column(db.Integer,db.ForeignKey('usuario.id'))
+    firmado_fecha=db.Column(db.DateTime)
+    firma_datos_json=db.Column(db.Text)
     creado_por_id=db.Column(db.Integer, db.ForeignKey('usuario.id'))
     ot=db.relationship('OT')
     @property
@@ -467,7 +470,7 @@ def asegurar_columnas():
     insp=inspect(db.engine)
     if 'usuario' in insp.get_table_names():
         cols={c['name'] for c in insp.get_columns('usuario')}
-        defs={'rut':'VARCHAR(20)','email':'VARCHAR(140)','sigla':'VARCHAR(10)','color':'VARCHAR(20)','disponible_planificacion':'BOOLEAN DEFAULT FALSE'}
+        defs={'rut':'VARCHAR(20)','email':'VARCHAR(140)','sigla':'VARCHAR(10)','color':'VARCHAR(20)','disponible_planificacion':'BOOLEAN DEFAULT FALSE','ing_profesion':'VARCHAR(100)','ing_categoria':'VARCHAR(80)','ing_certificacion':'VARCHAR(100)','ing_firma_autorizada':'BOOLEAN DEFAULT FALSE'}
         for n,t in defs.items():
             if n not in cols: db.session.execute(text(f'ALTER TABLE usuario ADD COLUMN {n} {t}'))
         try: db.session.execute(text('CREATE UNIQUE INDEX IF NOT EXISTS uq_usuario_sigla ON usuario (sigla) WHERE sigla IS NOT NULL'))
@@ -629,6 +632,15 @@ def exportar_ot_excel():
     buf=BytesIO();wb.save(buf);buf.seek(0)
     return send_file(buf,as_attachment=True,download_name='INGEPRO_Control_OT.xlsx',mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
+def ing_guardar_perfil_usuario(u,form):
+    # Solo ADMINISTRACIÓN llega a esta función (rutas protegidas).
+    u.ing_profesion=(form.get('ing_profesion') or '').strip()[:100]
+    u.ing_categoria=(form.get('ing_categoria') or '').strip()[:80]
+    u.ing_certificacion=(form.get('ing_certificacion') or '').strip()[:100]
+    autorizado='ing_firma_autorizada' in form
+    cumple= u.ing_profesion=='INGENIERO MECÁNICO' or bool(u.ing_categoria and u.ing_certificacion)
+    u.ing_firma_autorizada=bool(autorizado and cumple)
+
 @app.route('/usuarios')
 @permiso_required('usuarios')
 def usuarios():
@@ -654,7 +666,7 @@ def usuario_nuevo():
         if sigla and Usuario.query.filter_by(sigla=sigla).first(): flash('La sigla ya está asignada a otro usuario.'); return render_template('usuario_form.html',permisos=PERMISOS,usuario=None)
         if color and Usuario.query.filter_by(color=color).first(): flash('El color ya está asignado a otro usuario.'); return render_template('usuario_form.html',permisos=PERMISOS,usuario=None)
         u=Usuario(username=username,nombre=request.form['nombre'].strip(),cargo=request.form.get('cargo','').strip(),rut=request.form.get('rut','').strip(),email=request.form.get('email','').strip(),sigla=sigla,color=color,rol=request.form.get('rol','Usuario'),permisos_json=json.dumps(['ingreso','diagnostico','planificacion','produccion'] if request.form.get('rol')=='Supervisor de Producción' else request.form.getlist('permisos')),disponible_planificacion=('disponible_planificacion' in request.form)); u.set_password(request.form['password'])
-        db.session.add(u); db.session.commit(); audit('Usuario creado',u.username); flash('Usuario creado correctamente.'); return redirect(url_for('usuarios'))
+        ing_guardar_perfil_usuario(u,request.form); db.session.add(u); db.session.commit(); audit('Usuario creado',u.username); flash('Usuario creado correctamente.'); return redirect(url_for('usuarios'))
     return render_template('usuario_form.html',permisos=PERMISOS,usuario=None)
 
 @app.route('/usuarios/<int:uid>/editar',methods=['GET','POST'])
@@ -666,6 +678,7 @@ def usuario_editar(uid):
         if sigla and Usuario.query.filter(Usuario.sigla==sigla,Usuario.id!=u.id).first(): flash('La sigla ya está asignada a otro usuario.'); return render_template('usuario_form.html',permisos=PERMISOS,usuario=u)
         if color and Usuario.query.filter(Usuario.color==color,Usuario.id!=u.id).first(): flash('El color ya está asignado a otro usuario.'); return render_template('usuario_form.html',permisos=PERMISOS,usuario=u)
         u.nombre=request.form['nombre'].strip(); u.cargo=request.form.get('cargo','').strip(); u.rut=request.form.get('rut','').strip(); u.email=request.form.get('email','').strip(); u.sigla=sigla; u.color=color; u.rol=request.form.get('rol','Usuario'); u.permisos_json=json.dumps(['ingreso','diagnostico','planificacion','produccion'] if request.form.get('rol')=='Supervisor de Producción' else request.form.getlist('permisos')); u.disponible_planificacion=('disponible_planificacion' in request.form)
+        ing_guardar_perfil_usuario(u,request.form)
         if request.form.get('password'): u.set_password(request.form['password'])
         db.session.commit(); audit('Usuario modificado',u.username); flash('Usuario actualizado.'); return redirect(url_for('usuarios'))
     return render_template('usuario_form.html',permisos=PERMISOS,usuario=u)
@@ -3442,7 +3455,24 @@ def produccion_terminar(ot_id,comp_id,rep_id):
     flash('Etapa terminada y registrada. La siguiente etapa queda disponible según su planificación.')
     return redirect(url_for('produccion',buscar=request.form.get('buscar','')))
 
-with app.app_context(): db.create_all(); asegurar_columnas(); seed_maestros()
+def ing_migracion_v781():
+    from sqlalchemy import inspect, text
+    if 'informe_ingenieria' not in inspect(db.engine).get_table_names(): return
+    cols={c['name'] for c in inspect(db.engine).get_columns('informe_ingenieria')}
+    primera_instalacion='firmado_por_id' not in cols
+    for n,t in {'firmado_por_id':'INTEGER','firmado_fecha':'TIMESTAMP','firma_datos_json':'TEXT'}.items():
+        if n not in cols: db.session.execute(text(f'ALTER TABLE informe_ingenieria ADD COLUMN {n} {t}'))
+    # El estado VIGENTE anterior representa un informe aún editable.
+    db.session.execute(text("UPDATE informe_ingenieria SET estado='BORRADOR' WHERE estado='VIGENTE'"))
+    # Autorizar inicialmente solo al administrador especificado, nunca a otros usuarios por defecto.
+    if primera_instalacion: db.session.execute(text("""UPDATE usuario SET ing_profesion='INGENIERO MECÁNICO',
+        ing_categoria='CATEGORÍA I (NIVEL 1)',ing_certificacion='3894-2026',
+        ing_firma_autorizada=TRUE
+        WHERE lower(username)='javierzurita' AND lower(rol) IN ('administrador','admin','administrator')
+        AND (ing_certificacion IS NULL OR ing_certificacion='3894-2026')"""))
+    db.session.commit()
+
+with app.app_context(): db.create_all(); asegurar_columnas(); ing_migracion_v781(); seed_maestros()
 
 # ======================= INGENIERÍA V7.80 =======================
 ING_TIPOS=('VENTILADOR','IMPULSOR','ROTOR','EJE','POLEA')
@@ -3458,6 +3488,26 @@ ING_ANALISTA={
  'nombre':'JAVIER ZURITA ARAYA', 'profesion':'INGENIERO MECÁNICO',
  'rut':'14.108.431-3', 'especialidad':'ANÁLISIS DE VIBRACIONES',
  'categoria':'CATEGORÍA I (NIVEL 1)', 'codigo':'3894-2026'}
+
+def ing_firmantes():
+    return Usuario.query.filter(Usuario.activo.is_(True),Usuario.ing_firma_autorizada.is_(True)).order_by(Usuario.nombre).all()
+
+def ing_puede_firmar(u):
+    return bool(u and u.activo and u.ing_firma_autorizada and
+        (u.ing_profesion=='INGENIERO MECÁNICO' or (u.ing_categoria and u.ing_certificacion)))
+
+def ing_datos_firma(u):
+    return {'nombre':u.nombre,'profesion':u.ing_profesion or u.cargo or '',
+            'rut':u.rut or '', 'categoria':u.ing_categoria or '',
+            'codigo':u.ing_certificacion or ''}
+
+ING_REQUERIDOS_CIERRE=('descripcion','rpm','peso_equipo','planos','grado','norma','recomendacion','cierre')
+
+def ing_faltantes(informe):
+    d=informe.datos
+    faltan=[x.upper().replace('_',' ') for x in ING_REQUERIDOS_CIERRE if not str(d.get(x) or '').strip()]
+    if not (informe.foto1 or informe.foto2): faltan.append('AL MENOS UNA FOTOGRAFÍA')
+    return faltan
 
 def ing_foto_optimizada(archivo):
     if not archivo or not archivo.filename: return None
@@ -3498,24 +3548,24 @@ def ingenieria_nuevo():
         tipo=(request.form.get('tipo') or '').strip().upper()
         if not ot or tipo not in ING_TIPOS:
             flash('SELECCIONA UNA OT Y UN TIPO DE ELEMENTO VÁLIDOS.')
-            return render_template('ingenieria_form.html',informe=None,ots=ots,tipos=ING_TIPOS,datos=request.form,ot_elegida=elegido,analista=ING_ANALISTA)
+            return render_template('ingenieria_form.html',informe=None,ots=ots,tipos=ING_TIPOS,datos=request.form,ot_elegida=elegido,analista=ING_ANALISTA,firmantes=ing_firmantes())
         datos={k:(request.form.get(k) or '').strip()[:5000] for k in ING_CAMPOS}
         try:
             foto1=ing_foto_optimizada(request.files.get('foto1'))
             foto2=ing_foto_optimizada(request.files.get('foto2'))
         except ValueError as e:
-            flash(str(e));return render_template('ingenieria_form.html',informe=None,ots=ots,tipos=ING_TIPOS,datos=datos,ot_elegida=ot.id,analista=ING_ANALISTA)
+            flash(str(e));return render_template('ingenieria_form.html',informe=None,ots=ots,tipos=ING_TIPOS,datos=datos,ot_elegida=ot.id,analista=ING_ANALISTA,firmantes=ing_firmantes())
         informe=InformeIngenieria(ot_id=ot.id,tipo=tipo,datos_json=json.dumps(datos,ensure_ascii=False),foto1=foto1,foto2=foto2,creado_por_id=usuario_actual().id)
         db.session.add(informe);db.session.commit();audit('Informe ingeniería creado',informe.numero)
         flash('INFORME CREADO CORRECTAMENTE.');return redirect(url_for('ingenieria_editar',iid=informe.id))
-    return render_template('ingenieria_form.html',informe=None,ots=ots,tipos=ING_TIPOS,datos={},ot_elegida=elegido,analista=ING_ANALISTA)
+    return render_template('ingenieria_form.html',informe=None,ots=ots,tipos=ING_TIPOS,datos={},ot_elegida=elegido,analista=ING_ANALISTA,firmantes=ing_firmantes())
 
 @app.route('/ingenieria/<int:iid>/editar',methods=['GET','POST'])
 @permiso_required('ingenieria')
 def ingenieria_editar(iid):
     informe=db.session.get(InformeIngenieria,iid) or abort(404)
     if request.method=='POST':
-        if informe.estado=='ANULADO': abort(403)
+        if informe.estado in ('ANULADO','FINALIZADO'): abort(403)
         tipo=(request.form.get('tipo') or '').strip().upper()
         if tipo not in ING_TIPOS: flash('TIPO DE ELEMENTO NO VÁLIDO.');return redirect(request.url)
         datos={k:(request.form.get(k) or '').strip()[:5000] for k in ING_CAMPOS}
@@ -3527,9 +3577,26 @@ def ingenieria_editar(iid):
         for k,v in fotos.items():
             if v is not None: setattr(informe,k,v)
             elif request.form.get('quitar_'+k)=='1': setattr(informe,k,None)
-        db.session.commit();audit('Informe ingeniería actualizado',informe.numero)
-        flash('INFORME GUARDADO.');return redirect(url_for('ingenieria_editar',iid=iid))
-    return render_template('ingenieria_form.html',informe=informe,ots=[informe.ot],tipos=ING_TIPOS,datos=informe.datos,ot_elegida=informe.ot_id,analista=ING_ANALISTA)
+        accion=request.form.get('accion','guardar')
+        if accion=='finalizar':
+            u=usuario_actual()
+            if not ing_puede_firmar(u):
+                db.session.rollback();abort(403)
+            faltan=ing_faltantes(informe)
+            if faltan:
+                db.session.commit()
+                flash('AVANCE GUARDADO. PARA FINALIZAR FALTA: '+', '.join(faltan))
+                return redirect(url_for('ingenieria_editar',iid=iid))
+            informe.estado='FINALIZADO'
+            informe.firmado_por_id=u.id
+            informe.firmado_fecha=datetime.utcnow()
+            informe.firma_datos_json=json.dumps(ing_datos_firma(u),ensure_ascii=False)
+            db.session.commit();audit('Informe ingeniería finalizado y firmado',informe.numero)
+            flash('INFORME FINALIZADO Y FIRMADO.');return redirect(url_for('ingenieria_editar',iid=iid))
+        informe.estado='EN PROCESO' if accion=='proceso' else ('EN PROCESO' if informe.estado=='EN PROCESO' else 'BORRADOR')
+        db.session.commit();audit('Avance ingeniería guardado',informe.numero)
+        flash('AVANCE GUARDADO CORRECTAMENTE EN BASE DE DATOS.');return redirect(url_for('ingenieria_editar',iid=iid))
+    return render_template('ingenieria_form.html',informe=informe,ots=[informe.ot],tipos=ING_TIPOS,datos=informe.datos,ot_elegida=informe.ot_id,analista=ING_ANALISTA,firmantes=ing_firmantes())
 
 @app.route('/ingenieria/<int:iid>/foto/<int:n>')
 @permiso_required('ingenieria')
@@ -3547,6 +3614,7 @@ def ingenieria_foto(iid,n):
 def ingenieria_anular(iid):
     if not usuario_actual().es_admin: abort(403)
     informe=db.session.get(InformeIngenieria,iid) or abort(404)
+    if informe.estado=='FINALIZADO': abort(403)
     informe.estado='ANULADO';db.session.commit();audit('Informe ingeniería anulado',informe.numero)
     flash('INFORME ANULADO; EL NÚMERO SE CONSERVA.');return redirect(url_for('ingenieria_lista'))
 
@@ -3602,14 +3670,18 @@ def ingenieria_pdf(iid):
     story+=titulo('06. RECOMENDACIÓN Y CIERRE')
     story.extend([p('RECOMENDACIÓN: '+(d.get('recomendacion') or '—')),Spacer(1,2*mm),p('CIERRE: '+(d.get('cierre') or '—'))])
     story+=titulo('07. RESPONSABLE TÉCNICO')
-    story.append(tabla([('NOMBRE',ING_ANALISTA['nombre']),('PROFESIÓN',ING_ANALISTA['profesion']),('RUT',ING_ANALISTA['rut']),('CERTIFICACIÓN',f"ANALISTA DE VIBRACIONES {ING_ANALISTA['categoria']}"),('CÓDIGO DE CERTIFICACIÓN',ING_ANALISTA['codigo'])]))
+    if informe.estado=='FINALIZADO' and informe.firma_datos_json:
+        firma=json.loads(informe.firma_datos_json)
+        story.append(tabla([('NOMBRE',firma.get('nombre')),('PROFESIÓN',firma.get('profesion')),('RUT',firma.get('rut')),('CERTIFICACIÓN',firma.get('categoria')),('CÓDIGO DE CERTIFICACIÓN',firma.get('codigo')),('FIRMADO EL',informe.firmado_fecha.strftime('%d/%m/%Y %H:%M UTC') if informe.firmado_fecha else '')]))
+    else:
+        story.append(p('DOCUMENTO EN BORRADOR / EN PROCESO. SIN FIRMA NI APROBACIÓN TÉCNICA.',heading))
     story+=titulo('08. PERSONAL DE INSPECCIÓN')
     for k,label in [('realizado','REALIZADO POR'),('revisado','REVISADO POR'),('aprobado','APROBADO POR')]:
         story.append(p(f"{label}: {d.get(k+'_por') or '—'} | CARGO: {d.get(k+'_cargo') or '—'} | CORREO: {d.get(k+'_correo') or '—'} | TEL.: {d.get(k+'_telefono') or '—'}",small))
         story.append(Spacer(1,3*mm))
     def pie(canvas,doc):
         canvas.saveState();canvas.setFont('Helvetica',7);canvas.setFillColor(C.HexColor('#64748b'))
-        canvas.drawString(16*mm,12*mm,'INGEPRO · INFORME DE INGENIERÍA')
+        canvas.drawString(16*mm,12*mm,'INGEPRO · INFORME DE INGENIERÍA'+(' · NO FIRMADO' if informe.estado!='FINALIZADO' else ' · FIRMADO'))
         canvas.drawRightString(194*mm,12*mm,f'PÁGINA {doc.page}')
         canvas.restoreState()
     buf=BytesIO()

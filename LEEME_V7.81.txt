@@ -1,0 +1,9 @@
+INGEPRO RP V7.81 — SOLO ARCHIVOS MODIFICADOS
+
+INSTALACIÓN: copiar los archivos manteniendo las rutas de carpetas del repositorio. No eliminar ni reiniciar PostgreSQL. Respaldar la base de datos antes del despliegue.
+
+CAMBIOS: guardar avance, marcar en proceso, finalizar y firmar con usuario autenticado y autorizado; firma inmóvil en snapshot, fecha y usuario; PDF no firmado para borradores; autorización desde ADMINISTRACIÓN > USUARIOS; migración idempotente de columnas nuevas.
+
+CONFIGURACIÓN INICIAL: el usuario administrador cuyo username es exactamente javierzurita recibe la autorización y certificación 3894-2026 si no hay otra certificación registrada. Si el username es distinto, configurar manualmente en ADMINISTRACIÓN > USUARIOS.
+
+IMPORTANTE: la firma es una constancia electrónica interna vinculada a la sesión; no equivale a firma electrónica avanzada. Validar funcionalidad en Render con copia de respaldo. Los informes FINALIZADOS son de solo lectura.

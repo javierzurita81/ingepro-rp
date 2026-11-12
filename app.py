@@ -3260,9 +3260,16 @@ def oti_seleccionar():
         termino=f'%{buscar}%'
         consulta=consulta.filter(or_(OT.numero.ilike(termino),OT.cliente.ilike(termino),OT.equipo.ilike(termino)))
     ots=consulta.order_by(OT.fecha.desc(),OT.id.desc()).limit(300).all()
-    # Se cuentan solo los componentes recibidos; la OT se crea usando oti_origen.
+    # Solo se ofrecen OT cuya cotización vigente más reciente esté aprobada.
+    # Las cotizaciones anuladas no cuentan; una cotización posterior pendiente
+    # o rechazada impide reutilizar una aprobación anterior.
     opciones=[]
     for ot in ots:
+        cotizacion_vigente=(Cotizacion.query
+            .filter(Cotizacion.ot_id==ot.id, Cotizacion.estado!='Anulada')
+            .order_by(Cotizacion.id.desc()).first())
+        if not cotizacion_vigente or (cotizacion_vigente.estado or '').strip().casefold()!='aprobada':
+            continue
         recibidos=[c for c in ot.componentes_detalle if (c.condicion_ingreso or '').strip().casefold()=='recibido']
         opciones.append({'ot':ot,'componentes':len(recibidos)})
     return render_template('ot_interna_nueva.html',opciones=opciones,buscar=buscar)
@@ -3271,6 +3278,13 @@ def oti_seleccionar():
 @permiso_required('planificacion')
 def oti_nueva(ot_id):
     ot=db.session.get(OT,ot_id) or abort(404)
+    # Validación también al generar: no basta con ocultar la OT en el listado.
+    cotizacion_vigente=(Cotizacion.query
+        .filter(Cotizacion.ot_id==ot.id, Cotizacion.estado!='Anulada')
+        .order_by(Cotizacion.id.desc()).first())
+    if not cotizacion_vigente or (cotizacion_vigente.estado or '').strip().casefold()!='aprobada':
+        flash('No se puede generar una OT interna: la cotización vigente no está aprobada.')
+        return redirect(url_for('oti_seleccionar'))
     contenido=oti_origen(ot)
     if not contenido:
         flash('La OT no tiene trabajos seleccionados o planificados en componentes recibidos.')

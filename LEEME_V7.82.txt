@@ -1,0 +1,17 @@
+INGEPRO RP V7.82 — SOLO ARCHIVOS MODIFICADOS
+
+CAMBIO:
+- Módulo OT INTERNAS: el listado "Nueva OT Interna" muestra únicamente las OT cuya cotización vigente más reciente está en estado APROBADA.
+- Se conserva la selección manual de la OT antes de generar la OT Interna.
+- Se valida nuevamente la aprobación al generar, para impedir que se cree una OT Interna mediante una solicitud directa si la cotización no está aprobada.
+
+ARCHIVO A REEMPLAZAR:
+- app.py
+
+INSTALACIÓN:
+1. Realizar respaldo del proyecto y de PostgreSQL.
+2. Descomprimir este ZIP.
+3. Reemplazar únicamente ingepro-rp-main/app.py en el repositorio, conservando la ruta.
+4. Desplegar normalmente en Render.
+
+No reemplazar ni eliminar otros archivos. No requiere cambios ni migraciones de base de datos.

@@ -3198,9 +3198,10 @@ def oti_origen(ot):
             t['horas']+=max(0,(a.fecha_fin-a.fecha_inicio).days+1)*float(a.horas_dia or 0)
             if a.observacion and not t['instrucciones']:
                 t['instrucciones']=a.observacion
-        if trabajos:
-            resultado.append({'componente_id':comp.id,'componente':comp.nombre,
-                              'etapas':list(trabajos.values())})
+        # Incluir TODOS los componentes recibidos, incluso cuando aún no
+        # tengan reparaciones maestras ni actividades planificadas.
+        resultado.append({'componente_id':comp.id,'componente':comp.nombre,
+                          'etapas':list(trabajos.values())})
     return resultado
 
 
@@ -3287,7 +3288,7 @@ def oti_nueva(ot_id):
         return redirect(url_for('oti_seleccionar'))
     contenido=oti_origen(ot)
     if not contenido:
-        flash('La OT no tiene trabajos seleccionados o planificados en componentes recibidos.')
+        flash('La OT no tiene componentes marcados como recibidos.')
         return redirect(url_for('oti_lista'))
     nuevo=OTInterna(ot_id=ot.id,numero='TEMP-'+secrets.token_hex(8),creado_por=usuario_actual().nombre,contenido_json=json.dumps(contenido,ensure_ascii=False))
     db.session.add(nuevo);db.session.flush()

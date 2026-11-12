@@ -1,0 +1,7 @@
+INGEPRO RP V7.74 - Solo archivos modificados
+
+Copiar conservando las rutas:
+- app.py
+- templates/ot_interna_editar.html
+
+Corrección: todos los componentes recibidos aparecen en OT Interna, incluso sin reparaciones o planificación. Se conserva el filtro de cotización vigente aprobada. No se modifica la base de datos.

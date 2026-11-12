@@ -1,0 +1,1 @@
+V7.83: Reemplazar app.py, templates/ot_interna_nueva.html y templates/ot_interna_editar.html. Respalde antes. No requiere migración. Verificar en Render con OT aprobadas y componentes recibidos.

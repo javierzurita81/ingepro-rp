@@ -3198,8 +3198,6 @@ def oti_origen(ot):
             t['horas']+=max(0,(a.fecha_fin-a.fecha_inicio).days+1)*float(a.horas_dia or 0)
             if a.observacion and not t['instrucciones']:
                 t['instrucciones']=a.observacion
-        # Incluir TODOS los componentes recibidos, incluso cuando aún no
-        # tengan reparaciones maestras ni actividades planificadas.
         resultado.append({'componente_id':comp.id,'componente':comp.nombre,
                           'etapas':list(trabajos.values())})
     return resultado
@@ -3232,7 +3230,9 @@ def oti_contenido_actualizado(doc):
             if clave not in claves and clave[0]=='n':
                 nuevas.append(etapa)
         comp['etapas']=nuevas
-    return actual
+    # Mantener la selección original de componentes de esta orden interna.
+    ids={c.get('componente_id') for c in guardado}
+    return [c for c in actual if c['componente_id'] in ids]
 
 @app.route('/ot-internas')
 @permiso_required('planificacion')
@@ -3272,7 +3272,7 @@ def oti_seleccionar():
         if not cotizacion_vigente or (cotizacion_vigente.estado or '').strip().casefold()!='aprobada':
             continue
         recibidos=[c for c in ot.componentes_detalle if (c.condicion_ingreso or '').strip().casefold()=='recibido']
-        opciones.append({'ot':ot,'componentes':len(recibidos)})
+        opciones.append({'ot':ot,'componentes':len(recibidos),'detalle_componentes':recibidos})
     return render_template('ot_interna_nueva.html',opciones=opciones,buscar=buscar)
 
 @app.route('/ot-internas/nueva/<int:ot_id>',methods=['POST'])
@@ -3286,9 +3286,14 @@ def oti_nueva(ot_id):
     if not cotizacion_vigente or (cotizacion_vigente.estado or '').strip().casefold()!='aprobada':
         flash('No se puede generar una OT interna: la cotización vigente no está aprobada.')
         return redirect(url_for('oti_seleccionar'))
-    contenido=oti_origen(ot)
+    ids_raw=request.form.getlist('componente_ids')
+    try:
+        ids={int(x) for x in ids_raw}
+    except ValueError:
+        abort(400)
+    contenido=[c for c in oti_origen(ot) if c['componente_id'] in ids]
     if not contenido:
-        flash('La OT no tiene componentes marcados como recibidos.')
+        flash('Seleccione al menos un componente recibido para generar la OT interna.')
         return redirect(url_for('oti_lista'))
     nuevo=OTInterna(ot_id=ot.id,numero='TEMP-'+secrets.token_hex(8),creado_por=usuario_actual().nombre,contenido_json=json.dumps(contenido,ensure_ascii=False))
     db.session.add(nuevo);db.session.flush()

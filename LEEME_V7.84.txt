@@ -1,0 +1,6 @@
+INGEPRO RP V7.84 - SOLO ARCHIVOS MODIFICADOS
+Copiar app.py a la raiz de GitHub y templates/informe_salida.html a templates/.
+No subir una carpeta main adicional.
+Cambios: Informe de salida con requisito de cotizacion vigente aprobada; comparacion de diagnostico original a la izquierda y evidencia de salida y trabajo realizado a la derecha; medidas dentro del comentario; guardado progresivo sin medidas obligatorias; PDF comparativo.
+IMPORTANTE: el control de liberacion/calidad de la OT conserva su validacion previa de controles dimensionales formales. Este nuevo borrador de salida no libera automaticamente componentes ni autoriza despacho.
+Respalde la version anterior. Verifique en Render con una OT aprobada y con otra no aprobada. No se modifican tablas de la base de datos.

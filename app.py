@@ -995,6 +995,7 @@ def diagnostico_foto_eliminar(foto_id):
 def diagnostico_editar(hid):
     h=db.session.get(DiagnosticoHallazgo,hid) or abort(404)
     ot=h.ot
+    if not salida_aprobada(ot): abort(403)
     if request.method=='POST':
         comp_id=request.form.get('ot_componente_id')
         comp=db.session.get(OTComponente,int(comp_id)) if comp_id else None
@@ -1048,6 +1049,7 @@ def diagnostico_pdf(ot_id):
     from reportlab.lib.enums import TA_CENTER
 
     ot = db.session.get(OT, ot_id) or abort(404)
+    if not salida_aprobada(ot): abort(403)
     azul = colors.HexColor('#183e60')
     texto = colors.HexColor('#2b4153')
     suave = colors.HexColor('#e9eff5')
@@ -1181,7 +1183,7 @@ def diagnostico_pdf(ot_id):
     meta=Table(celdas,colWidths=[ancho/2]*2,cornerRadii=[9,9,9,9]);tabla_estilo(meta,colors.HexColor('#f0f4f8'),9)
     story.append(meta)
     story.extend(seccion('02. Objetivo del diagnóstico'))
-    story.append(P('Documentar las condiciones identificadas durante la inspección de los componentes efectivamente recibidos en maestranza, con evidencia fotográfica, observaciones técnicas y recomendaciones de reparación.'))
+    story.append(P('Comparar los hallazgos del diagnóstico de ingreso con los trabajos realizados y su evidencia fotográfica de salida.'))
     if ot.diagnostico:
         story.extend(seccion('Resumen general registrado en OT'))
         story.append(P(ot.diagnostico))
@@ -1289,30 +1291,49 @@ def salida_medidas_form(form):
            'Medida real: {real:g} mm').format(**v)
     return (texto,estado),None
 
+def salida_aprobada(ot):
+    vigente=(Cotizacion.query.filter(Cotizacion.ot_id==ot.id, Cotizacion.estado!='Anulada')
+             .order_by(Cotizacion.id.desc()).first())
+    return bool(vigente and (vigente.estado or '').strip().casefold()=='aprobada')
+
+def salida_diagnosticos(ot):
+    from collections import defaultdict
+    grupos=defaultdict(list)
+    for h in ot.hallazgos:
+        if h.ot_componente_id: grupos[h.ot_componente_id].append(h)
+    return grupos
+
 @app.route('/ot/<int:ot_id>/informe-salida', methods=['GET','POST'])
 @permiso_required('diagnostico')
 def salida_ot(ot_id):
     ot=db.session.get(OT,ot_id) or abort(404)
+    if not salida_aprobada(ot):
+        flash('El informe de salida requiere cotización vigente aprobada.')
+        return redirect(url_for('ver_ot',ot_id=ot.id))
     if request.method=='POST':
         comp_id=request.form.get('ot_componente_id')
-        comp=db.session.get(OTComponente,int(comp_id)) if comp_id else None
-        if not comp or comp.ot_id!=ot.id or (comp.condicion_ingreso or '').strip().casefold()!='recibido': flash('Solo puede registrar hallazgos de componentes efectivamente recibidos en esta OT.'); return redirect(url_for('salida_ot',ot_id=ot.id))
-        condicion=request.form.get('condicion','').strip()
-        if not condicion:
-            flash('Ingrese el comentario técnico de calidad.'); return redirect(url_for('salida_ot',ot_id=ot.id))
-        medidas,error=salida_medidas_form(request.form)
-        if error: flash(error); return redirect(url_for('salida_ot',ot_id=ot.id))
-        nombre,mime,datos=preparar_foto(next((f for f in (request.files.get('foto_camara'),request.files.get('foto_archivo'),request.files.get('foto')) if f and f.filename), None))
-        if not datos: flash('La fotografía del control es obligatoria.'); return redirect(url_for('salida_ot',ot_id=ot.id))
-        h=SalidaHallazgo(ot_id=ot.id,ot_componente_id=comp.id if comp else None,zona=request.form.get('zona','').strip(),condicion=condicion,trabajo_recomendado=request.form.get('trabajo_recomendado','').strip(),observacion=request.form.get('observacion','').strip(),estado=request.form.get('estado','Pendiente'),foto_nombre=nombre,foto_mime=mime,foto_datos=datos,creado_por=usuario_actual().nombre)
-        db.session.add(h); db.session.flush()
-        for archivo in request.files.getlist('fotos_adicionales'):
-            n,m,d=preparar_foto(archivo)
+        comp=db.session.get(OTComponente,int(comp_id)) if comp_id and comp_id.isdigit() else None
+        if not comp or comp.ot_id!=ot.id or (comp.condicion_ingreso or '').strip().casefold()!='recibido':
+            flash('Seleccione un componente recibido de esta OT.'); return redirect(url_for('salida_ot',ot_id=ot.id))
+        comentario=request.form.get('trabajo_recomendado','').strip()
+        if not comentario:
+            flash('Ingrese el trabajo realizado.'); return redirect(url_for('salida_ot',ot_id=ot.id))
+        archivo=next((f for f in (request.files.get('foto_camara'),request.files.get('foto_archivo'),request.files.get('foto')) if f and f.filename),None)
+        nombre,mime,datos=preparar_foto(archivo)
+        h=SalidaHallazgo(ot_id=ot.id,ot_componente_id=comp.id,zona=request.form.get('zona','').strip(),
+            condicion=request.form.get('condicion','').strip() or 'Ver diagnóstico de ingreso',
+            trabajo_recomendado=comentario,observacion=request.form.get('observacion','').strip(),
+            estado='En preparación',foto_nombre=nombre,foto_mime=mime,foto_datos=datos,
+            creado_por=usuario_actual().nombre)
+        db.session.add(h);db.session.flush()
+        for f in request.files.getlist('fotos_adicionales'):
+            n,m,d=preparar_foto(f)
             if d: db.session.add(SalidaFoto(hallazgo_id=h.id,nombre=n,mime=m,datos=d))
-        db.session.commit(); audit('Hallazgo informe de salida creado',f'{ot.numero} / {comp.nombre if comp else "General"}')
-        flash('Hallazgo agregado al informe de salida.'); return redirect(url_for('salida_ot',ot_id=ot.id))
+        db.session.commit();audit('Informe de salida guardado',f'{ot.numero} / {comp.nombre}')
+        flash('Trabajo realizado guardado. Puede seguir completando el informe.')
+        return redirect(url_for('salida_ot',ot_id=ot.id))
     marcas_guardadas={m.hallazgo_id:json.loads(m.marcas_json or '[]') for m in SalidaMarca.query.filter(SalidaMarca.hallazgo_id.in_([h.id for h in ot.salidas])).all()} if ot.salidas else {}
-    return render_template('informe_salida.html',ot=ot,componentes_recibidos=[c for c in ot.componentes_detalle if (c.condicion_ingreso or '').strip().casefold()=='recibido'],marcas_guardadas=marcas_guardadas)
+    return render_template('informe_salida.html',ot=ot,componentes_recibidos=[c for c in ot.componentes_detalle if (c.condicion_ingreso or '').strip().casefold()=='recibido'],marcas_guardadas=marcas_guardadas,diagnosticos=salida_diagnosticos(ot))
 
 @app.route('/informe-salida/hallazgo/<int:hid>/marcas',methods=['POST'])
 @permiso_required('diagnostico')
@@ -1375,14 +1396,14 @@ def salida_editar(hid):
         comp_id=request.form.get('ot_componente_id')
         comp=db.session.get(OTComponente,int(comp_id)) if comp_id else None
         if not comp or comp.ot_id!=ot.id or (comp.condicion_ingreso or '').strip().casefold()!='recibido': abort(400)
-        condicion=request.form.get('condicion','').strip()
-        if not condicion:
-            flash('Debes indicar la condición encontrada.'); return redirect(url_for('salida_editar',hid=h.id))
-        medidas,error=salida_medidas_form(request.form)
-        if error: flash(error); return redirect(url_for('salida_ot',ot_id=ot.id))
-        h.ot_componente_id=comp.id if comp else None
-        h.zona=request.form.get('zona','').strip(); h.condicion=condicion
-        h.trabajo_recomendado=medidas[0]; h.observacion=request.form.get('observacion','').strip(); h.estado=medidas[1]
+        comentario=request.form.get('trabajo_recomendado','').strip()
+        if not comentario:
+            flash('Ingrese el trabajo realizado.');return redirect(url_for('salida_ot',ot_id=ot.id))
+        h.ot_componente_id=comp.id
+        h.zona=request.form.get('zona','').strip()
+        h.condicion=request.form.get('condicion','').strip() or 'Ver diagnóstico de ingreso'
+        h.trabajo_recomendado=comentario
+        h.observacion=request.form.get('observacion','').strip()
         if request.files.get('foto') and request.files['foto'].filename:
             nombre,mime,datos=preparar_foto(request.files.get('foto'))
             if datos: h.foto_nombre=nombre; h.foto_mime=mime; h.foto_datos=datos
@@ -1501,7 +1522,7 @@ def salida_pdf(ot_id):
         canvas.drawRightString(w-34,24,f'OT {ot.numero} · Página {documento.page}')
         if documento.page>1:
             canvas.setFont('Helvetica-Bold',8);canvas.setFillColor(azul)
-            canvas.drawString(34,h-29,'INGEPRO  |  INFORME DE INFORME TÉCNICO DE SALIDA')
+            canvas.drawString(34,h-29,'INGEPRO  |  INFORME TÉCNICO DE SALIDA')
             canvas.setStrokeColor(azul);canvas.line(34,h-35,w-34,h-35)
         canvas.restoreState()
 
@@ -1514,7 +1535,7 @@ def salida_pdf(ot_id):
             logo=Image(logo_path,width=lw*factor,height=lh*factor)
         except Exception: logo=P('INGEPRO','titulo')
     else: logo=P('INGEPRO','titulo')
-    cabecera=Table([[logo,Paragraph('<b>INFORME DE INFORME TÉCNICO DE SALIDA</b><br/>'+
+    cabecera=Table([[logo,Paragraph('<b>INFORME TÉCNICO DE SALIDA</b><br/>'+
                      escape(ot.numero)+' · Rev. 00<br/>'+datetime.now().strftime('%d/%m/%Y'),
                      ParagraphStyle('v740_head',fontName='Helvetica',fontSize=9,leading=14,textColor=azul,alignment=TA_RIGHT))]],
                    colWidths=[ancho*.33,ancho*.67])
@@ -1540,7 +1561,7 @@ def salida_pdf(ot_id):
     meta=Table(celdas,colWidths=[ancho/2]*2,cornerRadii=[9,9,9,9]);tabla_estilo(meta,colors.HexColor('#f0f4f8'),9)
     story.append(meta)
     story.extend(seccion('02. Objetivo del informe de salida'))
-    story.append(P('Documentar las condiciones identificadas durante la inspección de los componentes efectivamente recibidos en maestranza, con evidencia fotográfica, observaciones técnicas y recomendaciones de reparación.'))
+    story.append(P('Comparar los hallazgos del diagnóstico de ingreso con los trabajos realizados y su evidencia fotográfica de salida.'))
     if False:
         story.extend(seccion('Resumen general registrado en OT'))
         story.append(P(''))
@@ -1569,30 +1590,22 @@ def salida_pdf(ot_id):
                 try: marcas=json.loads(foto.marcas_json or '[]')
                 except (ValueError,TypeError): marcas=[]
                 fotos.append((foto.datos,marcas))
-            comentario=[P('CONDICIÓN ENCONTRADA','etiqueta'),Spacer(1,3),P(hallazgo.condicion),Spacer(1,8),
-                        HRFlowable(width='100%',thickness=.5,color=colors.HexColor('#cad8e4')),Spacer(1,7),
-                        P('TRABAJO RECOMENDADO','etiqueta'),Spacer(1,3),P(hallazgo.trabajo_recomendado or '-'),Spacer(1,8),
-                        HRFlowable(width='100%',thickness=.5,color=colors.HexColor('#cad8e4')),Spacer(1,7),
-                        P('COMENTARIO TÉCNICO','etiqueta'),Spacer(1,3),P(hallazgo.observacion or '-')]
-            panel=Table([[comentario]],colWidths=[ancho*.55-16],cornerRadii=[9,9,9,9]);tabla_estilo(panel,suave,9)
-            titulo=P(f'Hallazgo {numero:02d} · {hallazgo.zona or "Inspección técnica"}','hallazgo')
-            if not fotos:
-                izquierda=[P('Sin fotografía registrada','peque')]
-                fila=Table([[izquierda,panel]],colWidths=[ancho*.45,ancho*.55])
-                fila.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'TOP'),('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),7)]))
-                story.append(KeepTogether([titulo,Spacer(1,6),fila,Spacer(1,12)]))
-            else:
-                for foto_indice,(datos,marcas) in enumerate(fotos):
-                    contador_fotos+=1
-                    izquierda=imagen_con_pie(datos,marcas,contador_fotos) or P('Fotografía no disponible','peque')
-                    derecha=panel if foto_indice==0 else P(f'Continuación del hallazgo {numero:02d} · Evidencia fotográfica adicional','peque')
-                    fila=Table([[izquierda,derecha]],colWidths=[ancho*.45,ancho*.55])
-                    fila.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'TOP'),('LEFTPADDING',(0,0),(-1,-1),0),
-                                              ('RIGHTPADDING',(0,0),(-1,-1),7),('TOPPADDING',(0,0),(-1,-1),4),
-                                              ('BOTTOMPADDING',(0,0),(-1,-1),4)]))
-                    bloque=[titulo if foto_indice==0 else P(f'Hallazgo {numero:02d} · Fotografía adicional','hallazgo'),Spacer(1,6),fila,Spacer(1,10)]
-                    # Mantener fotografía y comentario juntos en la misma página.
-                    story.append(KeepTogether(bloque))
+            originales=salida_diagnosticos(ot).get(comp.id,[])
+            original=next((d for d in originales if (d.zona or '').strip().casefold()==(hallazgo.zona or '').strip().casefold()),originales[0] if originales else None)
+            izquierda=[P('DIAGNÓSTICO DE INGRESO','etiqueta'),Spacer(1,4)]
+            if original and original.foto_datos:
+                izquierda.append(imagen_con_pie(original.foto_datos,[],numero) or P('Fotografía no disponible','peque'))
+            izquierda.extend([Spacer(1,5),P(original.condicion if original else 'Sin hallazgo original registrado','peque')])
+            derecha=[P('SALIDA · TRABAJO REALIZADO','etiqueta'),Spacer(1,4)]
+            if fotos:
+                derecha.append(imagen_con_pie(fotos[0][0],fotos[0][1],numero) or P('Fotografía no disponible','peque'))
+            else: derecha.append(P('Fotografía de salida pendiente','peque'))
+            derecha.extend([Spacer(1,5),P(hallazgo.trabajo_recomendado or 'Pendiente','normal')])
+            fila=Table([[izquierda,derecha]],colWidths=[ancho*.5,ancho*.5])
+            fila.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'TOP'),('LEFTPADDING',(0,0),(-1,-1),6),('RIGHTPADDING',(0,0),(-1,-1),6),('BOTTOMPADDING',(0,0),(-1,-1),9)]))
+            story.extend([P(f'Hallazgo {numero:02d} · {hallazgo.zona or "Componente"}','hallazgo'),Spacer(1,6),fila,Spacer(1,10)])
+            for extra_num,(datos,marcas) in enumerate(fotos[1:],2):
+                story.extend([P(f'Fotografía de salida adicional {extra_num}','peque'),imagen_con_pie(datos,marcas,extra_num) or P('Fotografía no disponible','peque'),Spacer(1,8)])
     story.extend(seccion('04. Resumen consolidado del informe de salida'))
     resumen=[[P('COMPONENTE','etiqueta'),P('HALLAZGOS','etiqueta'),P('ESTADO','etiqueta')]]
     for c in recibidos:

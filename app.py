@@ -1472,9 +1472,13 @@ def salida_pdf(ot_id):
         t.setStyle(TableStyle(reglas))
         return t
     def foto_marcada(datos, marcas):
+        """Optimiza exclusivamente la copia usada en el PDF; no altera fotos guardadas."""
         try:
             im=PILImage.open(BytesIO(datos))
             im=ImageOps.exif_transpose(im).convert('RGB')
+            # El ancho impreso por columna es reducido: 1100 px conserva detalle
+            # suficiente para el informe sin incrustar fotografías originales enormes.
+            im.thumbnail((1100, 1100), PILImage.Resampling.LANCZOS)
             if marcas:
                 dibujo=ImageDraw.Draw(im)
                 w,h=im.size
@@ -1492,13 +1496,14 @@ def salida_pdf(ot_id):
                             dibujo.line([(x+r,y-r),(x,y-r//2)],fill=color,width=grosor)
                             dibujo.line([(x+r,y-r),(x+r//2,y)],fill=color,width=grosor)
                     except (TypeError,ValueError,KeyError): continue
-            # Redondeo sutil aplicado sobre los píxeles de la fotografía.
-            # Se conserva toda la imagen y su proporción; solo se suavizan las cuatro esquinas.
-            radio=max(2, round(min(im.size)*0.012))
+            # Esquinas redondeadas sobre fondo blanco; JPEG comprimido en lugar de PNG.
+            radio=max(2,round(min(im.size)*0.012))
             mascara=PILImage.new('L',im.size,0)
             ImageDraw.Draw(mascara).rounded_rectangle((0,0,im.width-1,im.height-1),radius=radio,fill=255)
-            rgba=im.convert('RGBA'); rgba.putalpha(mascara)
-            salida=BytesIO(); rgba.save(salida,format='PNG',optimize=True)
+            fondo=PILImage.new('RGB',im.size,'white')
+            fondo.paste(im,(0,0),mascara)
+            salida=BytesIO()
+            fondo.save(salida,format='JPEG',quality=68,optimize=True,progressive=True)
             return salida.getvalue(),im.size
         except Exception: return None,None
     def imagen_con_pie(datos,marcas,numero):

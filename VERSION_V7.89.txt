@@ -1,0 +1,7 @@
+INGEPRO RP V7.89
+Cambio: optimización del peso del PDF Informe Técnico de Salida.
+Archivos de código modificados: app.py
+El PDF redimensiona imágenes a máximo 1100x1100 px y usa JPEG calidad 68.
+Conserva marcadores, proporciones y diseño de dos columnas.
+No altera imágenes originales ni base de datos.
+Validar peso y legibilidad en Render antes de dar por aprobada la versión.

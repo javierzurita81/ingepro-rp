@@ -1,0 +1,20 @@
+INGEPRO RP - VERSION V7.85
+
+SOLO ARCHIVOS MODIFICADOS - SIN CARPETA MAIN
+
+Archivos para reemplazar en GitHub:
+- app.py
+- templates/informe_salida.html
+
+Cambios:
+- Vista comparativa de dos columnas de ancho completo.
+- Captura desde cámara trasera de tablet y selección de archivos.
+- Vista previa antes de guardar.
+- Fotografías de cámara agregadas al editar sin eliminar la fotografía principal.
+- Botón Generar PDF existente y cambio de paleta a verde petróleo en PDF.
+- Guardado progresivo y comentarios libres conservados.
+
+No se modifican tablas ni migraciones de PostgreSQL.
+Respalde la versión actual antes de subir los dos archivos.
+Pruebe la cámara en una tablet y el PDF con una OT aprobada.
+Nota: la cámara depende de los permisos del navegador y HTTPS.

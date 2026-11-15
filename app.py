@@ -1407,6 +1407,11 @@ def salida_editar(hid):
         if request.files.get('foto') and request.files['foto'].filename:
             nombre,mime,datos=preparar_foto(request.files.get('foto'))
             if datos: h.foto_nombre=nombre; h.foto_mime=mime; h.foto_datos=datos
+        # V7.85: cámara de tablet añade evidencia sin borrar la foto principal.
+        foto_camara=request.files.get('foto_camara')
+        if foto_camara and foto_camara.filename:
+            n,m,d=preparar_foto(foto_camara)
+            if d: db.session.add(SalidaFoto(hallazgo_id=h.id,nombre=n,mime=m,datos=d))
         for archivo in request.files.getlist('fotos_adicionales'):
             n,m,d=preparar_foto(archivo)
             if d: db.session.add(SalidaFoto(hallazgo_id=h.id,nombre=n,mime=m,datos=d))
@@ -1432,10 +1437,10 @@ def salida_pdf(ot_id):
     from reportlab.lib.enums import TA_CENTER
 
     ot = db.session.get(OT, ot_id) or abort(404)
-    azul = colors.HexColor('#183e60')
+    azul = colors.HexColor('#155e59')
     texto = colors.HexColor('#2b4153')
-    suave = colors.HexColor('#e9eff5')
-    borde = colors.HexColor('#dce4eb')
+    suave = colors.HexColor('#e6f2ee')
+    borde = colors.HexColor('#d0e3dd')
     buf = BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4, rightMargin=34, leftMargin=34,
                             topMargin=49, bottomMargin=44,

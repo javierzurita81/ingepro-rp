@@ -1,0 +1,19 @@
+INGEPRO RP — VERSION V7.86
+
+Corrección: Informe de Salida independiente de Planificación.
+
+Archivos modificados:
+- app.py
+
+Cambios:
+- La etapa 07 Informe de Salida se habilita al aprobar la cotización vigente,
+  incluso cuando la etapa 06 Planificación esté pendiente.
+- El indicador de Informe de Salida queda pendiente (clicable) si aún no se
+  han completado los controles de salida, o completado cuando corresponda.
+- Se conservan las reglas existentes de Despacho y Entrega.
+- La ruta del informe ya exigía cotización vigente aprobada, sin planificación;
+  no fue necesario modificarla.
+
+Instalación: reemplazar app.py en la raíz del repositorio GitHub.
+No se requieren migraciones de base de datos.
+Verificación: probar OT aprobada no planificada y OT sin aprobación.

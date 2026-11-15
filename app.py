@@ -783,7 +783,9 @@ def seguimiento_ot(ot):
       ('Entregada','Fecha y recepción',entrega,'ver_ot','despacho')]
     pasos=[]
     for i,(nombre,descripcion,hecho,endpoint,permiso) in enumerate(definiciones):
-        previo=all(x['completo'] for x in pasos)
+        # V7.86: Informe de salida depende de aprobación vigente, no de planificación.
+        # El resto del flujo conserva sus prerrequisitos anteriores.
+        previo=(aprobada and not rechazada) if nombre=='Informe de salida' else all(x['completo'] for x in pasos)
         estado='completa' if hecho and previo else ('pendiente' if previo and not rechazada else 'bloqueada')
         if i==0: estado='completa'
         if endpoint=='ver_cotizacion' and q: href=url_for(endpoint,qid=q.id)

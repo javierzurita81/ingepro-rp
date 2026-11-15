@@ -1439,6 +1439,9 @@ def salida_pdf(ot_id):
     from reportlab.lib.enums import TA_CENTER
 
     ot = db.session.get(OT, ot_id) or abort(404)
+    if not salida_aprobada(ot):
+        flash('El informe de salida requiere cotización vigente aprobada.')
+        return redirect(url_for('ver_ot',ot_id=ot.id))
     azul = colors.HexColor('#155e59')
     texto = colors.HexColor('#2b4153')
     suave = colors.HexColor('#e6f2ee')
@@ -1551,9 +1554,21 @@ def salida_pdf(ot_id):
     story.extend([cabecera,Spacer(1,13)])
     recibidos=[c for c in ot.componentes_detalle if (c.condicion_ingreso or '').strip().casefold()=='recibido']
     ids_recibidos={c.id for c in recibidos}
-    hallazgos=[h for h in ot.salidas if h.ot_componente_id in ids_recibidos]
+    # V7.88: la fuente del informe comparativo es el DIAGNÓSTICO original.
+    # Las reparaciones pueden estar pendientes, pero los hallazgos siempre se imprimen.
+    hallazgos=[h for h in ot.hallazgos if h.ot_componente_id in ids_recibidos]
     agrupados=defaultdict(list)
     for h in hallazgos: agrupados[h.ot_componente_id].append(h)
+    salidas_por_componente=defaultdict(list)
+    for h in ot.salidas:
+        if h.ot_componente_id in ids_recibidos:
+            salidas_por_componente[h.ot_componente_id].append(h)
+    marcas_diagnostico={m.hallazgo_id:m.marcas_json for m in DiagnosticoMarca.query.filter(
+        DiagnosticoMarca.hallazgo_id.in_([h.id for h in hallazgos])).all()} if hallazgos else {}
+    def leer_marcas(valor):
+        try: return json.loads(valor or '[]')
+        except (ValueError,TypeError): return []
+
     story.extend(seccion('01. Antecedentes generales'))
     campos=[('Cliente',ot.cliente),('OT INGEPRO',ot.numero),('Equipo',ot.equipo),
             ('Serie / Tag',ot.serie or '-'),('Guía de ingreso',ot.guia or '-'),
@@ -1586,38 +1601,55 @@ def salida_pdf(ot_id):
         if not lista:
             story.append(P('Componente recibido sin hallazgos registrados.'))
             continue
-        for numero,hallazgo in enumerate(lista,1):
-            fotos=[]
-            if hallazgo.foto_datos:
-                registro=SalidaMarca.query.filter_by(hallazgo_id=hallazgo.id).first()
-                try: marcas=json.loads(registro.marcas_json or '[]') if registro else []
-                except (ValueError,TypeError): marcas=[]
-                fotos.append((hallazgo.foto_datos,marcas))
-            for foto in hallazgo.fotos_adicionales:
-                try: marcas=json.loads(foto.marcas_json or '[]')
-                except (ValueError,TypeError): marcas=[]
-                fotos.append((foto.datos,marcas))
-            originales=salida_diagnosticos(ot).get(comp.id,[])
-            original=next((d for d in originales if (d.zona or '').strip().casefold()==(hallazgo.zona or '').strip().casefold()),originales[0] if originales else None)
-            izquierda=[P('DIAGNÓSTICO DE INGRESO','etiqueta'),Spacer(1,4)]
-            if original and original.foto_datos:
-                izquierda.append(imagen_con_pie(original.foto_datos,[],numero) or P('Fotografía no disponible','peque'))
-            izquierda.extend([Spacer(1,5),P(original.condicion if original else 'Sin hallazgo original registrado','peque')])
-            derecha=[P('SALIDA · TRABAJO REALIZADO','etiqueta'),Spacer(1,4)]
-            if fotos:
-                derecha.append(imagen_con_pie(fotos[0][0],fotos[0][1],numero) or P('Fotografía no disponible','peque'))
-            else: derecha.append(P('Fotografía de salida pendiente','peque'))
-            derecha.extend([Spacer(1,5),P(hallazgo.trabajo_recomendado or 'Pendiente','normal')])
-            fila=Table([[izquierda,derecha]],colWidths=[ancho*.5,ancho*.5])
-            fila.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'TOP'),('LEFTPADDING',(0,0),(-1,-1),6),('RIGHTPADDING',(0,0),(-1,-1),6),('BOTTOMPADDING',(0,0),(-1,-1),9)]))
-            story.extend([P(f'Hallazgo {numero:02d} · {hallazgo.zona or "Componente"}','hallazgo'),Spacer(1,6),fila,Spacer(1,10)])
-            for extra_num,(datos,marcas) in enumerate(fotos[1:],2):
-                story.extend([P(f'Fotografía de salida adicional {extra_num}','peque'),imagen_con_pie(datos,marcas,extra_num) or P('Fotografía no disponible','peque'),Spacer(1,8)])
+        # Emparejar por componente y zona; cada salida se usa una sola vez.
+        pendientes=list(salidas_por_componente.get(comp.id,[]))
+        for numero,original in enumerate(lista,1):
+            zona=(original.zona or '').strip().casefold()
+            salida=next((h for h in pendientes if (h.zona or '').strip().casefold()==zona),None)
+            if salida is not None: pendientes.remove(salida)
+            izquierda=[P('DIAGNÓSTICO DE INGRESO','etiqueta'),Spacer(1,5)]
+            if original.foto_datos:
+                izquierda.append(imagen_con_pie(original.foto_datos,leer_marcas(marcas_diagnostico.get(original.id)),numero) or P('Fotografía no disponible','peque'))
+            else: izquierda.append(P('Fotografía original no registrada','peque'))
+            izquierda.extend([Spacer(1,6),P(original.condicion or 'Sin descripción','normal')])
+            # Fotografías adicionales del diagnóstico, si existen.
+            for extra in original.fotos_adicionales:
+                imagen=imagen_con_pie(extra.datos,leer_marcas(extra.marcas_json),numero)
+                if imagen: izquierda.extend([Spacer(1,6),imagen])
+            derecha=[P('SALIDA · TRABAJO REALIZADO','etiqueta'),Spacer(1,5)]
+            if salida:
+                fotos=[]
+                if salida.foto_datos:
+                    registro=SalidaMarca.query.filter_by(hallazgo_id=salida.id).first()
+                    fotos.append((salida.foto_datos,leer_marcas(registro.marcas_json if registro else None)))
+                for foto in salida.fotos_adicionales:
+                    fotos.append((foto.datos,leer_marcas(foto.marcas_json)))
+                if fotos:
+                    for datos,marcas in fotos:
+                        imagen=imagen_con_pie(datos,marcas,numero)
+                        if imagen: derecha.extend([imagen,Spacer(1,5)])
+                else: derecha.append(P('Fotografía de salida pendiente','peque'))
+                derecha.extend([Spacer(1,5),P(salida.trabajo_recomendado or 'Trabajo realizado pendiente','normal')])
+            else:
+                derecha.extend([P('Fotografía de salida pendiente','peque'),Spacer(1,8),P('Trabajo realizado pendiente de registro','normal')])
+            fila=Table([[izquierda,derecha]],colWidths=[ancho*.5,ancho*.5],hAlign='CENTER')
+            fila.setStyle(TableStyle([
+                ('VALIGN',(0,0),(-1,-1),'TOP'),
+                ('BOX',(0,0),(0,0),.6,borde),('BOX',(1,0),(1,0),.6,borde),
+                ('BACKGROUND',(0,0),(0,0),colors.HexColor('#f2f5f7')),
+                ('BACKGROUND',(1,0),(1,0),colors.HexColor('#f0f7f4')),
+                ('LEFTPADDING',(0,0),(-1,-1),9),('RIGHTPADDING',(0,0),(-1,-1),9),
+                ('TOPPADDING',(0,0),(-1,-1),10),('BOTTOMPADDING',(0,0),(-1,-1),10)]))
+            story.extend([CondPageBreak(120),P(f'HALLAZGO {numero:02d} · {original.zona or "Inspección técnica"}','hallazgo'),Spacer(1,7),fila,Spacer(1,12)])
+        # Registros de salida sin diagnóstico coincidente: conservarlos, no ocultarlos.
+        for extra in pendientes:
+            story.extend([P(f'Trabajo adicional · {extra.zona or "Componente"}','hallazgo'),
+                          P(extra.trabajo_recomendado or 'Pendiente'),Spacer(1,8)])
     story.extend(seccion('04. Resumen consolidado del informe de salida'))
     resumen=[[P('COMPONENTE','etiqueta'),P('HALLAZGOS','etiqueta'),P('ESTADO','etiqueta')]]
     for c in recibidos:
         hs=agrupados.get(c.id,[])
-        resumen.append([P(c.nombre,'peque'),P(str(len(hs)),'peque'),P(', '.join(sorted({h.estado or 'Pendiente' for h in hs})) if hs else 'Sin hallazgos','peque')])
+        resumen.append([P(c.nombre,'peque'),P(str(len(hs)),'peque'),P(('Trabajos registrados: '+str(len(salidas_por_componente.get(c.id,[])))) if hs else 'Sin hallazgos de diagnóstico','peque')])
     t=Table(resumen,colWidths=[ancho*.48,ancho*.18,ancho*.34],repeatRows=1,cornerRadii=[7,7,7,7]);tabla_estilo(t,None,7)
     t.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),suave),('LINEBELOW',(0,0),(-1,-1),.5,borde)]));story.append(t)
     story.extend(seccion('05. Conclusión general de la OT'))

@@ -1,0 +1,11 @@
+INGEPRO RP V7.88
+Solo archivo modificado: app.py
+- PDF Informe de Salida toma los hallazgos del Diagnóstico Técnico original.
+- Presenta comparación en dos columnas: diagnóstico y reparación.
+- Muestra hallazgos aunque no existan trabajos de salida guardados.
+- Recupera fotografías originales, adicionales y marcadores de diagnóstico.
+- Vincula las reparaciones guardadas por componente y zona.
+- Mantiene la aprobación vigente como requisito y no exige planificación.
+- Sin cambios de base de datos ni otras plantillas.
+Instalación: reemplazar app.py en raíz del repositorio y añadir VERSION_V7.88.txt.
+Validar en Render con OT-2026-0017 y fotografías reales.

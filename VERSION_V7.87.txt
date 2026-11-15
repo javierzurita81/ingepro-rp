@@ -1,0 +1,16 @@
+INGEPRO RP - VERSION V7.87
+Fecha: 2026-11-15
+
+Archivos modificados:
+- templates/informe_salida.html
+
+Cambios:
+- Botón Generar PDF siempre visible en Informe de Salida.
+- Abre la ruta PDF existente en una nueva pestaña.
+- Mejora el ancho del informe en pantallas grandes y tablets.
+- Conserva captura de fotografías, guardado y colores verde petróleo.
+
+Instalación: reemplazar solo templates/informe_salida.html en GitHub.
+No se modifica app.py ni la base de datos.
+Nota: PDF sin trabajos guardados puede no contener registros de reparación.
+Verificar en Render con una OT aprobada.

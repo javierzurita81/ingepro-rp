@@ -1,11 +1,27 @@
 {% extends 'base.html' %}{% block c %}
 <style>
-.salida-pair{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:12px 0}.salida-half{background:#f3f6f9;border:1px solid #d8e0e8;border-radius:10px;padding:13px;min-width:0}.salida-half img{width:100%;max-height:260px;object-fit:contain;background:#fff;border-radius:7px}.salida-half textarea{width:100%;min-height:160px}.salida-label{font-size:12px;font-weight:700;letter-spacing:.03em;margin-bottom:10px}.salida-hallazgo{padding:10px;background:white;border-radius:7px;margin:8px 0;white-space:pre-wrap}.salida-photo{margin-bottom:12px}.salida-actions{display:flex;gap:9px;flex-wrap:wrap;align-items:center;margin-top:12px}@media(max-width:680px){.salida-pair{grid-template-columns:1fr}}
+/* V7.85: el informe ocupa todo el ancho; no hereda columnas de otros módulos. */
+.salida-pair{display:grid!important;grid-template-columns:minmax(0,1fr) minmax(0,1fr)!important;gap:16px;margin:16px 0;width:100%;align-items:start;clear:both}
+.salida-half{background:#f3f6f8;border:1px solid #d3dedb;border-radius:10px;padding:14px;min-width:0;width:auto!important;float:none!important}
+.salida-half img{display:block;width:100%;max-height:310px;object-fit:contain;background:white;border-radius:7px}
+.salida-half textarea{width:100%;min-height:155px;box-sizing:border-box;resize:vertical}
+.salida-label{font-size:12px;font-weight:750;letter-spacing:.03em;margin-bottom:10px;color:#155e59}
+.salida-hallazgo{padding:11px;background:white;border-radius:7px;margin:8px 0;white-space:pre-wrap;overflow-wrap:anywhere}
+.salida-photo{margin-bottom:12px}.salida-actions{display:flex;gap:9px;flex-wrap:wrap;align-items:center;margin-top:12px}
+.salida-pair form,.salida-pair label{display:block;width:100%;min-width:0}.salida-pair input[type=file]{display:block;max-width:100%;width:100%;box-sizing:border-box;margin:5px 0 12px}
+.salida-green,.salida-green.btn,.salida-green.btn.primary{background:#155e59!important;color:white!important;border-color:#155e59!important}
+.salida-green-outline{color:#155e59!important;border:1px solid #8cbcb0!important;background:#fff!important}
+.salida-camera-actions{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}.salida-camera-actions label{flex:1 1 170px;width:auto!important}
+.salida-camera-actions input[type=file]{position:absolute;width:1px!important;height:1px;opacity:0;overflow:hidden}
+.salida-camera-actions .btn{display:block;text-align:center;cursor:pointer;padding:10px 12px;border-radius:7px}
+.salida-preview{display:none;max-width:100%;max-height:210px;margin:8px auto;border-radius:6px}
+section.panel.wide:has(.salida-pair){display:block!important;width:100%!important;max-width:none!important;box-sizing:border-box;float:none!important}
+@media(max-width:740px){.salida-pair{grid-template-columns:minmax(0,1fr)!important}.salida-half{padding:11px}}
 </style>
-<div class="pagehead"><div><h1>Informe técnico de salida · {{ot.numero}}</h1><p>{{ot.cliente}} · {{ot.equipo}}</p></div><div class="actionrow"><a class="btn" href="{{url_for('ver_ot',ot_id=ot.id)}}">← Volver a OT</a>{% if ot.salidas %}<a class="btn primary" href="{{url_for('salida_pdf',ot_id=ot.id)}}">Generar PDF</a>{% endif %}</div></div>
-<div class="panel wide"><h2>Informe de salida · Comparación de hallazgos</h2><p class="muted">Cotización aprobada · Izquierda: diagnóstico de ingreso · Derecha: reparación, fotografías y trabajo realizado. Las medidas se escriben dentro del comentario. Puede guardar avances sin finalizar el informe.</p></div>
+<div class="pagehead"><div><h1>Informe técnico de salida · {{ot.numero}}</h1><p>{{ot.cliente}} · {{ot.equipo}}</p></div><div class="actionrow"><a class="btn" href="{{url_for('ver_ot',ot_id=ot.id)}}">← Volver a OT</a>{% if ot.salidas %}<a class="btn primary salida-green" href="{{url_for('salida_pdf',ot_id=ot.id)}}">Generar PDF</a>{% endif %}</div></div>
+<div class="panel wide" style="border-top:4px solid #155e59"><h2 style="color:#155e59">Informe de salida · Comparación de hallazgos</h2><p class="muted">Cotización aprobada · Izquierda: diagnóstico de ingreso · Derecha: reparación, fotografías y trabajo realizado. Las medidas se escriben dentro del comentario. Puede guardar avances sin finalizar el informe.</p></div>
 {% for c in componentes_recibidos %}
-<section class="panel wide"><h2>{{c.codigo or ''}} · {{c.nombre}}</h2>
+<section class="panel wide" style="display:block;width:100%;max-width:none;box-sizing:border-box"><h2 style="color:#155e59">{{c.codigo or ''}} · {{c.nombre}}</h2>
 {% set originales=diagnosticos.get(c.id,[]) %}
 {% if originales %}
 {% for d in originales %}
@@ -15,9 +31,9 @@
 {% for h in registros %}
 {% if h.foto_datos %}<div class="salida-photo"><img src="{{url_for('salida_foto',hid=h.id)}}" alt="Fotografía de salida"></div>{% endif %}
 {% for f in h.fotos_adicionales %}<div class="salida-photo"><img src="{{url_for('salida_foto_adicional',foto_id=f.id)}}" alt="Fotografía adicional de salida"></div>{% endfor %}
-<form method="post" enctype="multipart/form-data" action="{{url_for('salida_editar',hid=h.id)}}"><input type="hidden" name="ot_componente_id" value="{{c.id}}"><input type="hidden" name="zona" value="{{d.zona or ''}}"><input type="hidden" name="condicion" value="{{d.condicion}}"><label>Trabajo realizado, medidas y hallazgos corregidos<textarea name="trabajo_recomendado" required lang="es" spellcheck="true">{{h.trabajo_recomendado or ''}}</textarea></label><label>Agregar fotografía desde tablet o archivo<input type="file" name="fotos_adicionales" accept="image/*" multiple></label><div class="salida-actions"><button class="btn primary">Guardar cambios</button></div></form>
+<form method="post" enctype="multipart/form-data" action="{{url_for('salida_editar',hid=h.id)}}"><input type="hidden" name="ot_componente_id" value="{{c.id}}"><input type="hidden" name="zona" value="{{d.zona or ''}}"><input type="hidden" name="condicion" value="{{d.condicion}}"><label>Trabajo realizado, medidas y hallazgos corregidos<textarea name="trabajo_recomendado" required lang="es" spellcheck="true">{{h.trabajo_recomendado or ''}}</textarea></label><div class="salida-camera-actions"><label><span class="btn salida-green">📷 Tomar fotografía</span><input type="file" name="foto_camara" accept="image/*" capture="environment" onchange="salidaVistaPrevia(this)"></label><label><span class="btn salida-green-outline">▣ Elegir archivos</span><input type="file" name="fotos_adicionales" accept="image/*" multiple onchange="salidaVistaPrevia(this)"></label></div><img class="salida-preview" alt="Vista previa de la fotografía"><div class="salida-actions"><button class="btn primary salida-green">Guardar cambios</button></div></form>
 {% else %}
-<form method="post" enctype="multipart/form-data"><input type="hidden" name="ot_componente_id" value="{{c.id}}"><input type="hidden" name="zona" value="{{d.zona or ''}}"><input type="hidden" name="condicion" value="{{d.condicion}}"><label>Trabajo realizado, medidas y hallazgos corregidos<textarea name="trabajo_recomendado" required lang="es" spellcheck="true" placeholder="Describa la reparación realizada y las mediciones, si corresponde."></textarea></label><label>Fotografía de salida (opcional durante la preparación)<input type="file" name="foto_archivo" accept="image/*"></label><label>Fotografías adicionales<input type="file" name="fotos_adicionales" accept="image/*" multiple></label><button class="btn primary">Guardar avance</button></form>
+<form method="post" enctype="multipart/form-data"><input type="hidden" name="ot_componente_id" value="{{c.id}}"><input type="hidden" name="zona" value="{{d.zona or ''}}"><input type="hidden" name="condicion" value="{{d.condicion}}"><label>Trabajo realizado, medidas y hallazgos corregidos<textarea name="trabajo_recomendado" required lang="es" spellcheck="true" placeholder="Describa la reparación realizada y las mediciones, si corresponde."></textarea></label><div class="salida-camera-actions"><label><span class="btn salida-green">📷 Tomar fotografía</span><input type="file" name="foto_camara" accept="image/*" capture="environment" onchange="salidaVistaPrevia(this)"></label><label><span class="btn salida-green-outline">▣ Cargar fotografía</span><input type="file" name="foto_archivo" accept="image/*" onchange="salidaVistaPrevia(this)"></label><label><span class="btn salida-green-outline">+ Fotos adicionales</span><input type="file" name="fotos_adicionales" accept="image/*" multiple onchange="salidaVistaPrevia(this)"></label></div><img class="salida-preview" alt="Vista previa de la fotografía"><button class="btn primary salida-green">Guardar avance</button></form>
 {% endfor %}
 </div></div>
 {% endfor %}
@@ -28,4 +44,12 @@
 {% endif %}{% endfor %}
 </section>
 {% else %}<div class="panel wide"><p>No hay componentes recibidos en esta OT.</p></div>{% endfor %}
+<script>
+function salidaVistaPrevia(input){
+ const file=input.files && input.files[0]; if(!file)return;
+ const preview=input.closest('form').querySelector('.salida-preview'); if(!preview)return;
+ if(preview.dataset.url) URL.revokeObjectURL(preview.dataset.url);
+ const url=URL.createObjectURL(file);preview.dataset.url=url;preview.src=url;preview.style.display='block';
+}
+</script>
 {% endblock %}

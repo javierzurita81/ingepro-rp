@@ -1,0 +1,10 @@
+INGEPRO RP V7.90 - REVISADA
+Base: ingepro-rp-main (10)(1).zip
+
+ARCHIVOS MODIFICADOS: app.py
+
+- Compresión JPEG 76%, máximo 1400x1400 para fotos nuevas del Informe de Salida.
+- Aplica al crear y al editar, tanto foto principal como cámara y fotos adicionales.
+- Diagnóstico Técnico permanece sin cambios.
+- No altera fotografías existentes ni estructura PostgreSQL.
+- Requiere pruebas funcionales en Render antes de producción.

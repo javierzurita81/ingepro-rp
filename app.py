@@ -1305,6 +1305,23 @@ def salida_diagnosticos(ot):
         if h.ot_componente_id: grupos[h.ot_componente_id].append(h)
     return grupos
 
+def preparar_foto_salida(upload):
+    """Comprime fotografías nuevas solo del Informe de Salida.
+
+    No modifica el procesamiento de imágenes del Diagnóstico Técnico.
+    """
+    if not upload or not upload.filename:
+        return None, None, None
+    try:
+        with PILImage.open(upload.stream) as original:
+            imagen = ImageOps.exif_transpose(original).convert('RGB')
+            imagen.thumbnail((1400, 1400), PILImage.Resampling.LANCZOS)
+            salida = BytesIO()
+            imagen.save(salida, format='JPEG', quality=76, optimize=True)
+        return upload.filename[:180], 'image/jpeg', salida.getvalue()
+    except Exception:
+        return None, None, None
+
 @app.route('/ot/<int:ot_id>/informe-salida', methods=['GET','POST'])
 @permiso_required('diagnostico')
 def salida_ot(ot_id):
@@ -1321,7 +1338,7 @@ def salida_ot(ot_id):
         if not comentario:
             flash('Ingrese el trabajo realizado.'); return redirect(url_for('salida_ot',ot_id=ot.id))
         archivo=next((f for f in (request.files.get('foto_camara'),request.files.get('foto_archivo'),request.files.get('foto')) if f and f.filename),None)
-        nombre,mime,datos=preparar_foto(archivo)
+        nombre,mime,datos=preparar_foto_salida(archivo)
         h=SalidaHallazgo(ot_id=ot.id,ot_componente_id=comp.id,zona=request.form.get('zona','').strip(),
             condicion=request.form.get('condicion','').strip() or 'Ver diagnóstico de ingreso',
             trabajo_recomendado=comentario,observacion=request.form.get('observacion','').strip(),
@@ -1329,7 +1346,7 @@ def salida_ot(ot_id):
             creado_por=usuario_actual().nombre)
         db.session.add(h);db.session.flush()
         for f in request.files.getlist('fotos_adicionales'):
-            n,m,d=preparar_foto(f)
+            n,m,d=preparar_foto_salida(f)
             if d: db.session.add(SalidaFoto(hallazgo_id=h.id,nombre=n,mime=m,datos=d))
         db.session.commit();audit('Informe de salida guardado',f'{ot.numero} / {comp.nombre}')
         flash('Trabajo realizado guardado. Puede seguir completando el informe.')
@@ -1407,15 +1424,15 @@ def salida_editar(hid):
         h.trabajo_recomendado=comentario
         h.observacion=request.form.get('observacion','').strip()
         if request.files.get('foto') and request.files['foto'].filename:
-            nombre,mime,datos=preparar_foto(request.files.get('foto'))
+            nombre,mime,datos=preparar_foto_salida(request.files.get('foto'))
             if datos: h.foto_nombre=nombre; h.foto_mime=mime; h.foto_datos=datos
         # V7.85: cámara de tablet añade evidencia sin borrar la foto principal.
         foto_camara=request.files.get('foto_camara')
         if foto_camara and foto_camara.filename:
-            n,m,d=preparar_foto(foto_camara)
+            n,m,d=preparar_foto_salida(foto_camara)
             if d: db.session.add(SalidaFoto(hallazgo_id=h.id,nombre=n,mime=m,datos=d))
         for archivo in request.files.getlist('fotos_adicionales'):
-            n,m,d=preparar_foto(archivo)
+            n,m,d=preparar_foto_salida(archivo)
             if d: db.session.add(SalidaFoto(hallazgo_id=h.id,nombre=n,mime=m,datos=d))
         db.session.commit(); audit('Hallazgo informe de salida editado',f'{ot.numero} / Hallazgo {h.id}')
         flash('Hallazgo actualizado.'); return redirect(url_for('salida_ot',ot_id=ot.id))

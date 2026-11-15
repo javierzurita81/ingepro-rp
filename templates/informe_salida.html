@@ -1,6 +1,11 @@
 {% extends 'base.html' %}{% block c %}
 <style>
-/* V7.85: el informe ocupa todo el ancho; no hereda columnas de otros módulos. */
+/* V7.87: ancho completo y acceso permanente al PDF. */
+main:has(.salida-pair){width:calc(100% - 40px)!important;max-width:1450px!important;margin:24px auto!important}
+main:has(.salida-pair) > .panel.wide{display:block!important;width:100%!important;max-width:none!important}
+main:has(.salida-pair) > .pagehead{width:100%;flex-wrap:wrap}
+main:has(.salida-pair) > .pagehead .actionrow{display:flex;gap:10px;flex-wrap:wrap}
+@media(max-width:740px){main:has(.salida-pair){width:100%!important;padding:0 12px!important}}
 .salida-pair{display:grid!important;grid-template-columns:minmax(0,1fr) minmax(0,1fr)!important;gap:16px;margin:16px 0;width:100%;align-items:start;clear:both}
 .salida-half{background:#f3f6f8;border:1px solid #d3dedb;border-radius:10px;padding:14px;min-width:0;width:auto!important;float:none!important}
 .salida-half img{display:block;width:100%;max-height:310px;object-fit:contain;background:white;border-radius:7px}
@@ -18,7 +23,7 @@
 section.panel.wide:has(.salida-pair){display:block!important;width:100%!important;max-width:none!important;box-sizing:border-box;float:none!important}
 @media(max-width:740px){.salida-pair{grid-template-columns:minmax(0,1fr)!important}.salida-half{padding:11px}}
 </style>
-<div class="pagehead"><div><h1>Informe técnico de salida · {{ot.numero}}</h1><p>{{ot.cliente}} · {{ot.equipo}}</p></div><div class="actionrow"><a class="btn" href="{{url_for('ver_ot',ot_id=ot.id)}}">← Volver a OT</a>{% if ot.salidas %}<a class="btn primary salida-green" href="{{url_for('salida_pdf',ot_id=ot.id)}}">Generar PDF</a>{% endif %}</div></div>
+<div class="pagehead"><div><h1>Informe técnico de salida · {{ot.numero}}</h1><p>{{ot.cliente}} · {{ot.equipo}}</p></div><div class="actionrow"><a class="btn" href="{{url_for('ver_ot',ot_id=ot.id)}}">← Volver a OT</a><a class="btn primary salida-green" href="{{url_for('salida_pdf',ot_id=ot.id)}}" target="_blank" rel="noopener">Generar PDF</a></div></div>
 <div class="panel wide" style="border-top:4px solid #155e59"><h2 style="color:#155e59">Informe de salida · Comparación de hallazgos</h2><p class="muted">Cotización aprobada · Izquierda: diagnóstico de ingreso · Derecha: reparación, fotografías y trabajo realizado. Las medidas se escriben dentro del comentario. Puede guardar avances sin finalizar el informe.</p></div>
 {% for c in componentes_recibidos %}
 <section class="panel wide" style="display:block;width:100%;max-width:none;box-sizing:border-box"><h2 style="color:#155e59">{{c.codigo or ''}} · {{c.nombre}}</h2>

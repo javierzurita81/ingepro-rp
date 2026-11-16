@@ -392,7 +392,7 @@ SUPERVISOR_GET={'diagnosticos_lista','informes_salida_lista','index','control_ge
     'diagnostico_foto','diagnostico_foto_adicional','diagnostico_pdf',
     'diagnostico_editar','salida_ot','salida_foto','salida_foto_adicional','salida_pdf','salida_editar','produccion','planificacion_gantt','planificacion_gantt_pdf',
     'componentes_modelo','oti_lista','oti_seleccionar','oti_editar','oti_pdf','checklist_lista','checklist_componente','checklist_pdf','bosquejo_ver','logout','login','static'}
-SUPERVISOR_POST={'nueva_ot','diagnostico_ot','diagnostico_editar','salida_ot','salida_editar','salida_marcas','salida_foto_marcas','salida_foto_eliminar',
+SUPERVISOR_POST={'nueva_ot','diagnostico_ot','diagnostico_editar','salida_ot','salida_estado_guardar','salida_editar','salida_marcas','salida_foto_marcas','salida_foto_eliminar',
     'diagnostico_marcas','diagnostico_foto_marcas','diagnostico_foto_eliminar',
     'checklist_componente','produccion_terminar','oti_nueva','oti_editar','api_gantt_rapido'}
 

@@ -1,0 +1,13 @@
+INGEPRO RP V7.94 - DESPACHOS
+Base: ZIP completo proporcionado (ingepro-rp-main (13).zip) + modificaciones V7.93.
+Cambios:
+- OT entregada excluida del selector y de confirmación de despachos.
+- Componentes confirmados en otros despachos excluidos del selector.
+- Edición de despacho confirmado reservada al administrador, con auditoría de componentes modificados.
+- Confirmar despacho mantiene estado Despachada y cuadro 08 verde por OT.
+- PDF incluye checklist de verificación de carga y firmas existentes.
+- Formulario presenta nombres de OT y componentes en modo consulta.
+- No se modifican tablas ni se requieren migraciones.
+- Documento interno no tributario: no reemplaza documentos exigidos por el SII.
+Pruebas: compilación Python y sintaxis Jinja correctas. Prueba en Render pendiente.
+Archivos a subir a GitHub: app.py, templates/guia_form.html, templates/guias_despacho.html.

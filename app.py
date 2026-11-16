@@ -782,7 +782,11 @@ def seguimiento_ot(ot):
     informe_terminado=bool(informe_estado and informe_estado.estado=='Terminado')
     informe_avance=bool(ot.salidas)
     calidad=bool(recibidos) and all(salida_componente_liberado(ot,c.id) for c in recibidos)
-    despacho=bool((ot.despacho or '').strip() and (ot.guia or '').strip())
+    # V7.93: el despacho depende de documentos internos confirmados, no de campos manuales.
+    items_despachados=(GuiaDespachoItem.query.join(GuiaDespacho).filter(GuiaDespachoItem.ot_id==ot.id,GuiaDespacho.estado=='Despachada').all())
+    ids_despachados={i.componente_id for i in items_despachados}
+    despacho=bool(ids_despachados)
+    despacho_parcial=despacho and any(c.id not in ids_despachados for c in recibidos)
     entrega=bool(ot.fecha_entrega_faena and (ot.recibido_por or '').strip())
     definiciones=[
       ('Ingreso','Equipo y OT cliente',True,'ver_ot','ingreso'),
@@ -792,13 +796,13 @@ def seguimiento_ot(ot):
       ('Aprobación','Autorización cliente',aprobada,'ver_cotizacion' if q else 'cotizacion_nueva','cotizaciones'),
       ('Planificación','Gantt compacto',plan,'planificacion_gantt','planificacion'),
       ('Informe de salida','Fotografías y medidas',informe_terminado,'salida_ot','diagnostico'),
-      ('Despacho','Guía y salida',despacho,'ver_ot','despacho'),
+      ('Despacho','Parcial · consultar / completar' if despacho_parcial else 'Formulario interno registrado' if despacho else 'Control interno de salida',despacho,'guia_nueva','despacho'),
       ('Entregada','Fecha y recepción',entrega,'ver_ot','despacho')]
     pasos=[]
     for i,(nombre,descripcion,hecho,endpoint,permiso) in enumerate(definiciones):
         # V7.86: Informe de salida depende de aprobación vigente, no de planificación.
         # El resto del flujo conserva sus prerrequisitos anteriores.
-        previo=(aprobada and not rechazada) if nombre=='Informe de salida' else all(x['completo'] for x in pasos)
+        previo=(aprobada and not rechazada) if nombre=='Informe de salida' else (informe_terminado if nombre=='Despacho' else (despacho if nombre=='Entregada' else all(x['completo'] for x in pasos)))
         estado='completa' if hecho and previo else ('pendiente' if previo and not rechazada else 'bloqueada')
         if nombre=='Informe de salida' and previo and not hecho and informe_avance:
             estado='preparacion'
@@ -807,11 +811,12 @@ def seguimiento_ot(ot):
         elif endpoint=='cotizacion_nueva': href=url_for(endpoint,ot_id=ot.id)
         elif endpoint in ('diagnostico_ot','ot_reparaciones','salida_ot'): href=url_for(endpoint,ot_id=ot.id)
         elif endpoint=='planificacion_gantt': href=url_for(endpoint,ot_id=ot.id)
+        elif endpoint=='guia_nueva': href=url_for('guia_nueva',cliente=ot.cliente,ot_id=ot.id)
         else: href=url_for('ver_ot',ot_id=ot.id, _anchor='ot-'+('entrega' if i==8 else 'despacho' if i==7 else 'datos'))
         pasos.append(dict(nombre=nombre,descripcion=descripcion,completo=bool(hecho and previo),estado=estado,href=href,permitido=usuario_actual().puede(permiso)))
     if rechazada: condicion='Cotización rechazada'
     elif entrega: condicion='Entregada'
-    elif despacho: condicion='Despachada'
+    elif despacho: condicion='Despacho parcial' if despacho_parcial else 'Despachada'
     elif calidad: condicion='Lista para despacho'
     elif plan: condicion='Planificada'
     elif aprobada: condicion='Aprobada'
@@ -2156,14 +2161,24 @@ def checklist_pdf(ot_id,cid):
     return send_file(buf,mimetype='application/pdf',as_attachment=True,download_name=f'Checklist_OT_{ot.numero}_Componente_{cid}.pdf')
 
 # V7.63: documento interno de despacho; no sustituye DTE del SII.
+def gd_informe_terminado(ot):
+    estado=InformeSalidaEstado.query.filter_by(ot_id=ot.id).first()
+    return bool(estado and estado.estado=='Terminado')
+
+def gd_ot_entregada(ot):
+    """OT cerrada por recepción registrada; no puede volver a despacho."""
+    return bool(ot and ((ot.fecha_entrega_faena and (ot.recibido_por or '').strip()) or (ot.estado or '').strip().casefold()=='entregada'))
+
 def gd_disponibles(cliente,guia_id=None):
-    ocupados=db.session.query(GuiaDespachoItem.componente_id).join(GuiaDespacho).filter(GuiaDespacho.estado=='Despachada').all()
-    bloqueados={r[0] for r in ocupados}
-    if guia_id:
-        propia=db.session.query(GuiaDespachoItem.componente_id).join(GuiaDespacho).filter(GuiaDespacho.id==guia_id,GuiaDespacho.estado=='Despachada').all()
-        bloqueados.difference_update(r[0] for r in propia)
+    """Solo componentes recibidos, con informe terminado, no entregados ni despachados en otro formulario."""
+    ocupados=db.session.query(GuiaDespachoItem.componente_id).join(GuiaDespacho).filter(
+        GuiaDespacho.estado=='Despachada')
+    if guia_id is not None:
+        ocupados=ocupados.filter(GuiaDespacho.id!=guia_id)
+    bloqueados={r[0] for r in ocupados.all()}
     ots=OT.query.filter_by(cliente=cliente).order_by(OT.id.desc()).limit(250).all()
-    return [(ot,[c for c in ot.componentes_detalle if c.condicion_ingreso=='Recibido' and c.id not in bloqueados]) for ot in ots]
+    return [(ot,[c for c in ot.componentes_detalle if (c.condicion_ingreso or '').strip().casefold()=='recibido' and c.id not in bloqueados])
+            for ot in ots if not gd_ot_entregada(ot) and gd_informe_terminado(ot)]
 
 @app.route('/guias-despacho')
 @permiso_required('despacho')
@@ -2176,6 +2191,10 @@ def guias_despacho():
 def guia_nueva():
     clientes=sorted({o.cliente for o in OT.query.all() if o.cliente})
     cliente=(request.values.get('cliente') or '').strip()
+    ot_inicial=request.args.get('ot_id',type=int)
+    if ot_inicial and not cliente:
+        origen=db.session.get(OT,ot_inicial)
+        if origen: cliente=origen.cliente
     if request.method=='POST':
         if cliente not in clientes: abort(400)
         ids=set()
@@ -2184,8 +2203,8 @@ def guia_nueva():
         disponibles={c.id:(ot,c) for ot,cs in gd_disponibles(cliente) for c in cs}
         if not ids or not ids.issubset(disponibles):
             flash('Seleccione componentes disponibles de un mismo cliente.'); return redirect(url_for('guia_nueva',cliente=cliente))
-        if any(not salida_componente_liberado(ot,c.id) for ot,c in disponibles.values() if c.id in ids):
-            flash('Debe completar el Informe de salida de todos los componentes seleccionados.'); return redirect(url_for('guia_nueva',cliente=cliente))
+        if any(not gd_informe_terminado(disponibles[cid][0]) for cid in ids):
+            flash('Debe terminar el Informe de Salida de cada OT seleccionada.'); return redirect(url_for('guia_nueva',cliente=cliente))
         fecha=date.fromisoformat(request.form.get('fecha') or date.today().isoformat())
         guia=GuiaDespacho(cliente=cliente,fecha=fecha,transporte=(request.form.get('transporte') or '').strip()[:160],creado_por=usuario_actual().id)
         db.session.add(guia); db.session.flush()
@@ -2195,31 +2214,46 @@ def guia_nueva():
         db.session.commit(); audit('Guía creada',guia.numero)
         flash('Guía guardada.'); return redirect(url_for('guia_editar',gid=guia.id))
     grupos=gd_disponibles(cliente) if cliente in clientes else []
-    return render_template('guia_form.html',guia=None,clientes=clientes,cliente=cliente,grupos=grupos,seleccionados=set(),hoy=date.today().isoformat())
+    return render_template('guia_form.html',guia=None,clientes=clientes,cliente=cliente,grupos=grupos,seleccionados=set(),hoy=date.today().isoformat(),ot_inicial=ot_inicial,editable=True,detalles=[])
 
 @app.route('/guias-despacho/<int:gid>',methods=['GET','POST'])
 @permiso_required('despacho')
 def guia_editar(gid):
     guia=db.session.get(GuiaDespacho,gid) or abort(404)
+    confirmado=guia.estado=='Despachada'
+    # Un despacho confirmado solo puede ser corregido por un administrador.
+    editable=guia.estado=='Borrador' or (confirmado and usuario_actual().es_admin)
     if request.method=='POST':
-        if guia.estado!='Borrador': abort(403)
+        if not editable: abort(403)
         try: ids={int(x) for x in request.form.getlist('componentes')}
         except ValueError: abort(400)
-        disponibles={c.id:(ot,c) for ot,cs in gd_disponibles(guia.cliente) for c in cs}
+        disponibles={c.id:(ot,c) for ot,cs in gd_disponibles(guia.cliente,guia.id if confirmado else None) for c in cs}
         if not ids or not ids.issubset(disponibles):
-            flash('Debe seleccionar componentes disponibles.'); return redirect(url_for('guia_editar',gid=gid))
-        if any(not salida_componente_liberado(ot,c.id) for ot,c in disponibles.values() if c.id in ids):
-            flash('Falta Informe de salida conforme.'); return redirect(url_for('guia_editar',gid=gid))
-        guia.fecha=date.fromisoformat(request.form.get('fecha') or date.today().isoformat())
+            flash('Seleccione componentes disponibles. Las OT entregadas y los componentes despachados en otros documentos están bloqueados.')
+            return redirect(url_for('guia_editar',gid=gid))
+        if any(gd_ot_entregada(disponibles[cid][0]) or not gd_informe_terminado(disponibles[cid][0]) for cid in ids):
+            flash('Una OT está entregada o no tiene Informe de Salida terminado.')
+            return redirect(url_for('guia_editar',gid=gid))
+        try: fecha=date.fromisoformat(request.form.get('fecha') or date.today().isoformat())
+        except ValueError:
+            flash('Fecha de despacho inválida.'); return redirect(url_for('guia_editar',gid=gid))
+        anteriores=sorted(i.componente_id for i in guia.items)
+        guia.fecha=fecha
         guia.transporte=(request.form.get('transporte') or '').strip()[:160]
         guia.items.clear(); db.session.flush()
         for cid in sorted(ids):
-            ot,c=disponibles[cid]; guia.items.append(GuiaDespachoItem(ot_id=ot.id,componente_id=cid,cantidad=1))
-        db.session.commit(); audit('Guía editada',guia.numero)
-        flash('Cambios guardados.'); return redirect(url_for('guia_editar',gid=gid))
-    grupos=gd_disponibles(guia.cliente) if guia.estado=='Borrador' else []
+            ot,c=disponibles[cid]
+            guia.items.append(GuiaDespachoItem(ot_id=ot.id,componente_id=cid,cantidad=1))
+        db.session.commit()
+        audit('Despacho confirmado corregido' if confirmado else 'Guía editada',
+              f'{guia.numero}: componentes anteriores={anteriores}; actuales={sorted(ids)}')
+        flash('Despacho actualizado; el historial de modificación quedó registrado.' if confirmado else 'Cambios guardados.')
+        return redirect(url_for('guia_editar',gid=gid))
+    grupos=gd_disponibles(guia.cliente,guia.id if confirmado else None) if editable else []
     seleccionados={i.componente_id for i in guia.items}
-    return render_template('guia_form.html',guia=guia,clientes=[],cliente=guia.cliente,grupos=grupos,seleccionados=seleccionados,hoy=date.today().isoformat())
+    detalles=[(db.session.get(OT,i.ot_id),db.session.get(OTComponente,i.componente_id),i.cantidad) for i in guia.items]
+    return render_template('guia_form.html',guia=guia,clientes=[],cliente=guia.cliente,grupos=grupos,
+                           seleccionados=seleccionados,hoy=date.today().isoformat(),editable=editable,detalles=detalles)
 
 @app.route('/guias-despacho/<int:gid>/estado',methods=['POST'])
 @permiso_required('despacho')
@@ -2228,6 +2262,8 @@ def guia_estado(gid):
     accion=request.form.get('accion')
     if guia.estado!='Borrador' or accion not in ('Despachada','Anulada'): abort(403)
     if accion=='Despachada':
+        if any(gd_ot_entregada(db.session.get(OT,i.ot_id)) or not gd_informe_terminado(db.session.get(OT,i.ot_id)) for i in guia.items):
+            flash('No se puede despachar: alguna OT está Entregada o no tiene Informe de Salida terminado.'); return redirect(url_for('guia_editar',gid=gid))
         ocupados={r[0] for r in db.session.query(GuiaDespachoItem.componente_id).join(GuiaDespacho).filter(GuiaDespacho.estado=='Despachada').all()}
         if not guia.items or any(i.componente_id in ocupados for i in guia.items):
             flash('Hay componentes ya despachados. Revise antes de confirmar.'); return redirect(url_for('guia_editar',gid=gid))
@@ -2241,8 +2277,8 @@ def guia_pdf(gid):
     buf=BytesIO(); doc=SimpleDocTemplate(buf,pagesize=A4,leftMargin=35,rightMargin=35,topMargin=35,bottomMargin=35)
     styles=getSampleStyleSheet(); story=[]
     story.append(Paragraph('<font color="#12577D"><b>INGEPRO · DIVISIÓN MAESTRANZA</b></font>',styles['Heading2']))
-    story.append(Paragraph('<b>COMPROBANTE INTERNO DE DESPACHO</b>',styles['Heading3']))
-    for k,v in [('N.º guía',guia.numero),('Fecha',guia.fecha.strftime('%d-%m-%Y')),('Cliente',guia.cliente),('Transporte / patente',guia.transporte or '—'),('Estado',guia.estado)]:
+    story.append(Paragraph('<b>FORMULARIO INTERNO DE CONTROL DE DESPACHO</b>',styles['Heading3']))
+    for k,v in [('N.º formulario',guia.numero),('Fecha',guia.fecha.strftime('%d-%m-%Y')),('Cliente',guia.cliente),('Transporte / patente',guia.transporte or '—'),('Estado',guia.estado)]:
         story.append(Paragraph(f'<b>{k}:</b> {xml_escape(str(v))}',styles['Normal']))
     story.append(Spacer(1,14))
     filas=[['OT INGEPRO','EQUIPO','COMPONENTE','CANT.']]
@@ -2251,7 +2287,7 @@ def guia_pdf(gid):
         filas.append([xml_escape(ot.numero if ot else '—'),Paragraph(xml_escape(ot.equipo if ot else '—'),styles['Normal']),Paragraph(xml_escape(c.nombre if c else '—'),styles['Normal']),str(item.cantidad)])
     t=Table(filas,colWidths=[85,155,240,44],repeatRows=1,hAlign='LEFT')
     t.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),colors.HexColor('#E6EFF5')),('GRID',(0,0),(-1,-1),.5,colors.HexColor('#B4C1CD')),('VALIGN',(0,0),(-1,-1),'MIDDLE'),('FONTSIZE',(0,0),(-1,-1),8),('TOPPADDING',(0,0),(-1,-1),7),('BOTTOMPADDING',(0,0),(-1,-1),7)]))
-    story.extend([t,Spacer(1,32),Paragraph('_________________________                       _________________________',styles['Normal']),Paragraph('Entrega INGEPRO                                                    Recibe conforme',styles['Normal']),Spacer(1,18),Paragraph('<font color="#64748B">Documento interno de entrega. No constituye guía de despacho electrónica tributaria del SII.</font>',styles['Normal'])])
+    story.extend([t,Spacer(1,15),Paragraph('<b>VERIFICACIÓN DE CARGA</b>',styles['Normal']),Paragraph('[  ] Componentes y cantidades revisados    [  ] Identificación de OT verificada',styles['Normal']),Paragraph('[  ] Estado y embalaje revisados    [  ] Documentación de traslado verificada',styles['Normal']),Spacer(1,24),Paragraph('_________________________                       _________________________',styles['Normal']),Paragraph('Entrega INGEPRO                                                    Recibe conforme',styles['Normal']),Spacer(1,18),Paragraph('<font color="#64748B">Documento interno de entrega. No constituye guía de despacho electrónica tributaria del SII.</font>',styles['Normal'])])
     doc.build(story); buf.seek(0)
     return send_file(buf,mimetype='application/pdf',as_attachment=True,download_name=f'{guia.numero}.pdf')
 

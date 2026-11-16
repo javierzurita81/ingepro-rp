@@ -1401,6 +1401,7 @@ def salida_ot(ot_id):
         db.session.commit();audit('Informe de salida guardado',f'{ot.numero} / {comp.nombre}')
         flash('Trabajo realizado guardado. Puede seguir completando el informe.')
         return redirect(url_for('salida_ot',ot_id=ot.id))
+    informe_estado=InformeSalidaEstado.query.filter_by(ot_id=ot.id).first()
     marcas_guardadas={m.hallazgo_id:json.loads(m.marcas_json or '[]') for m in SalidaMarca.query.filter(SalidaMarca.hallazgo_id.in_([h.id for h in ot.salidas])).all()} if ot.salidas else {}
     return render_template('informe_salida.html',ot=ot,componentes_recibidos=[c for c in ot.componentes_detalle if (c.condicion_ingreso or '').strip().casefold()=='recibido'],marcas_guardadas=marcas_guardadas,diagnosticos=salida_diagnosticos(ot),informe_estado=(informe_estado.estado if informe_estado else ('En preparación' if ot.salidas else 'Pendiente')))
 

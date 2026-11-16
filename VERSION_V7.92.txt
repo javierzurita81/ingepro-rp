@@ -1,0 +1,21 @@
+INGEPRO RP - VERSION V7.92
+Fecha: 2026-11-15
+
+CORRECCION:
+- Solucionado NameError: informe_estado no definido al abrir Informe de Salida.
+- Se consulta el estado guardado de la OT antes de renderizar la plantilla.
+- Se mantiene la distincion Pendiente / En preparacion / Terminado.
+
+ARCHIVOS MODIFICADOS:
+- app.py
+
+SIN CAMBIOS:
+- Diagnostico Tecnico, plantillas HTML, generacion PDF y esquema PostgreSQL.
+
+INSTALACION:
+- Respaldar version actual.
+- Reemplazar app.py en la raiz del repositorio GitHub.
+- Agregar VERSION_V7.92.txt en la raiz.
+- Desplegar en Render y probar /ot/22/informe-salida.
+
+VERIFICACION: sintaxis Python correcta; pruebas funcionales en Render pendientes.

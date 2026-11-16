@@ -24,6 +24,16 @@ section.panel.wide:has(.salida-pair){display:block!important;width:100%!importan
 @media(max-width:740px){.salida-pair{grid-template-columns:minmax(0,1fr)!important}.salida-half{padding:11px}}
 </style>
 <div class="pagehead"><div><h1>Informe técnico de salida · {{ot.numero}}</h1><p>{{ot.cliente}} · {{ot.equipo}}</p></div><div class="actionrow"><a class="btn" href="{{url_for('ver_ot',ot_id=ot.id)}}">← Volver a OT</a><a class="btn primary salida-green" href="{{url_for('salida_pdf',ot_id=ot.id)}}" target="_blank" rel="noopener">Generar PDF</a></div></div>
+<div class="panel wide" style="border-left:5px solid #155e59;display:block;width:100%;max-width:none;box-sizing:border-box">
+  <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap">
+    <div><strong>Estado del informe:</strong> <span style="color:#155e59;font-weight:700">{{informe_estado}}</span><br><small class="muted">Terminar el informe no significa despachar ni entregar la OT.</small></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <form method="post" action="{{url_for('salida_estado_guardar',ot_id=ot.id)}}"><input type="hidden" name="accion" value="guardar"><button class="btn salida-green-outline" type="submit">Guardar informe</button></form>
+      <form method="post" action="{{url_for('salida_estado_guardar',ot_id=ot.id)}}"><input type="hidden" name="accion" value="terminar"><button class="btn primary salida-green" type="submit">Terminar informe</button></form>
+      <form method="post" action="{{url_for('salida_estado_guardar',ot_id=ot.id)}}"><input type="hidden" name="accion" value="editar"><button class="btn salida-green-outline" type="submit">Editar informe</button></form>
+    </div>
+  </div>
+</div>
 <div class="panel wide" style="border-top:4px solid #155e59"><h2 style="color:#155e59">Informe de salida · Comparación de hallazgos</h2><p class="muted">Cotización aprobada · Izquierda: diagnóstico de ingreso · Derecha: reparación, fotografías y trabajo realizado. Las medidas se escriben dentro del comentario. Puede guardar avances sin finalizar el informe.</p></div>
 {% for c in componentes_recibidos %}
 <section class="panel wide" style="display:block;width:100%;max-width:none;box-sizing:border-box"><h2 style="color:#155e59">{{c.codigo or ''}} · {{c.nombre}}</h2>

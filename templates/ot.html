@@ -7,13 +7,14 @@
 </section>
 <section class="card" style="margin:12px 0 18px" id="seguimiento-ot">
  <div class="ot-track-head"><div><h2 style="margin:0">Seguimiento de procesos</h2><p class="muted" style="margin:4px 0">Seleccione una etapa habilitada para abrir el módulo de esta OT.</p></div><strong class="ot-condition">{{condicion}}</strong></div>
+ <style>.ot-track-block.preparacion{background:#fff6e5;border-color:#e4bf7e}.ot-track-block.preparacion .ot-track-top span{color:#9b6511}</style>
  <div class="ot-track-grid">{% for p in pasos %}
  {% if p.estado!='bloqueada' and p.permitido %}<a class="ot-track-block {{p.estado}}" href="{{p.href}}">{% else %}<div class="ot-track-block bloqueada" aria-disabled="true">{% endif %}
- <div class="ot-track-top"><small>{{'%02d'|format(loop.index)}}</small><span>{% if p.estado=='completa' %}✓{% elif p.estado=='pendiente' %}✕{% else %}🔒{% endif %}</span></div>
+ <div class="ot-track-top"><small>{{'%02d'|format(loop.index)}}</small><span>{% if p.estado=='completa' %}✓{% elif p.estado=='pendiente' %}✕{% elif p.estado=='preparacion' %}◷{% else %}🔒{% endif %}</span></div>
  <strong>{{p.nombre}}</strong><small>{{p.descripcion}}</small>
  {% if p.estado!='bloqueada' and p.permitido %}</a>{% else %}</div>{% endif %}
  {% endfor %}</div>
- <p class="muted" style="font-size:12px;margin:10px 0 0">Verde: completada · Rojo: pendiente y habilitada · Gris: inhabilitada hasta cumplir requisitos. La cotización rechazada detiene la reparación.</p>
+ <p class="muted" style="font-size:12px;margin:10px 0 0">Verde: completada · Amarillo: en preparación · Rojo: pendiente y habilitada · Gris: inhabilitada hasta cumplir requisitos. La cotización rechazada detiene la reparación.</p>
 </section>
 {% if not ot.componentes_detalle %}<div class="card warning"><h2>Esta OT aún no tiene despiece</h2><p>Selecciona el modelo para cargar sus componentes. Después registra los elementos recibidos en el módulo de ingreso.</p><form method="post" action="{{url_for('ot_cargar_despiece',ot_id=ot.id)}}"><label>Modelo<select name="modelo_id" required><option value="">Seleccionar modelo...</option>{% for m in modelos %}<option value="{{m.id}}">{{m.tipo}} · {{m.marca}} · {{m.modelo}}</option>{% endfor %}</select></label><button class="primary">Cargar despiece en esta OT</button></form></div>{% endif %}
 <section class="card" style="margin:12px 0 18px"><h2>Datos de ingreso de equipo</h2>

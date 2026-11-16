@@ -1,0 +1,12 @@
+INGEPRO RP - V7.91
+Archivos modificados: app.py, templates/informe_salida.html, templates/ot.html.
+
+- Estado editorial persistente del Informe de Salida por OT: Pendiente, En preparación, Terminado.
+- Botones Guardar informe, Terminar informe y Editar informe; la edición sigue disponible luego de terminar.
+- Seguimiento de OT: rojo pendiente, amarillo en preparación, verde terminado.
+- El estado editorial es independiente de la planificación y de las validaciones de calidad, despacho y entrega.
+- Se agrega la tabla informe_salida_estado mediante db.create_all() al iniciar la aplicación; no modifica tablas existentes.
+- No se modificó el módulo Diagnóstico Técnico ni el generador PDF.
+
+INSTALACIÓN: subir estos archivos a sus rutas equivalentes en la raíz del repositorio, sin carpeta main. Hacer respaldo de BD antes del despliegue.
+PRUEBAS PENDIENTES EN RENDER: guardar, terminar, editar, volver a abrir, seguimiento de OT, PDF y comprobación de que despacho/entrega siguen sus reglas actuales.

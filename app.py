@@ -257,6 +257,15 @@ class SalidaHallazgo(db.Model):
     creado_por=db.Column(db.String(120))
     componente=db.relationship('OTComponente')
 
+class InformeSalidaEstado(db.Model):
+    """Estado editorial independiente de la liberación de calidad/despacho."""
+    __tablename__ = 'informe_salida_estado'
+    id = db.Column(db.Integer, primary_key=True)
+    ot_id = db.Column(db.Integer, db.ForeignKey('ot.id'), nullable=False, unique=True, index=True)
+    estado = db.Column(db.String(30), nullable=False, default='En preparación')
+    actualizado = db.Column(db.DateTime, default=datetime.utcnow)
+    actualizado_por = db.Column(db.String(120))
+
 class SalidaMarca(db.Model):
     __tablename__='salida_marca'
     id=db.Column(db.Integer,primary_key=True)
@@ -768,6 +777,10 @@ def seguimiento_ot(ot):
     plan=bool(actividades)
     reparacion=bool((ot.reparacion or '').strip())
     recibidos=[c for c in ot.componentes_detalle if (c.condicion_ingreso or '').strip().casefold()=='recibido']
+    # V7.91: estado editorial de informe, separado de la liberación de calidad.
+    informe_estado=InformeSalidaEstado.query.filter_by(ot_id=ot.id).first()
+    informe_terminado=bool(informe_estado and informe_estado.estado=='Terminado')
+    informe_avance=bool(ot.salidas)
     calidad=bool(recibidos) and all(salida_componente_liberado(ot,c.id) for c in recibidos)
     despacho=bool((ot.despacho or '').strip() and (ot.guia or '').strip())
     entrega=bool(ot.fecha_entrega_faena and (ot.recibido_por or '').strip())
@@ -778,7 +791,7 @@ def seguimiento_ot(ot):
       ('Envío cotización','Fecha y destinatario',enviada,'ver_cotizacion' if q else 'cotizacion_nueva','cotizaciones'),
       ('Aprobación','Autorización cliente',aprobada,'ver_cotizacion' if q else 'cotizacion_nueva','cotizaciones'),
       ('Planificación','Gantt compacto',plan,'planificacion_gantt','planificacion'),
-      ('Informe de salida','Fotografías y medidas',calidad,'salida_ot','diagnostico'),
+      ('Informe de salida','Fotografías y medidas',informe_terminado,'salida_ot','diagnostico'),
       ('Despacho','Guía y salida',despacho,'ver_ot','despacho'),
       ('Entregada','Fecha y recepción',entrega,'ver_ot','despacho')]
     pasos=[]
@@ -787,6 +800,8 @@ def seguimiento_ot(ot):
         # El resto del flujo conserva sus prerrequisitos anteriores.
         previo=(aprobada and not rechazada) if nombre=='Informe de salida' else all(x['completo'] for x in pasos)
         estado='completa' if hecho and previo else ('pendiente' if previo and not rechazada else 'bloqueada')
+        if nombre=='Informe de salida' and previo and not hecho and informe_avance:
+            estado='preparacion'
         if i==0: estado='completa'
         if endpoint=='ver_cotizacion' and q: href=url_for(endpoint,qid=q.id)
         elif endpoint=='cotizacion_nueva': href=url_for(endpoint,ot_id=ot.id)
@@ -937,6 +952,7 @@ def diagnostico_ot(ot_id):
             if d: db.session.add(DiagnosticoFoto(hallazgo_id=h.id,nombre=n,mime=m,datos=d))
         db.session.commit(); audit('Hallazgo diagnóstico creado',f'{ot.numero} / {comp.nombre if comp else "General"}')
         flash('Hallazgo agregado al diagnóstico.'); return redirect(url_for('diagnostico_ot',ot_id=ot.id))
+    informe_estado=InformeSalidaEstado.query.filter_by(ot_id=ot.id).first()
     marcas_guardadas={m.hallazgo_id:json.loads(m.marcas_json or '[]') for m in DiagnosticoMarca.query.filter(DiagnosticoMarca.hallazgo_id.in_([h.id for h in ot.hallazgos])).all()} if ot.hallazgos else {}
     return render_template('diagnostico.html',ot=ot,componentes_recibidos=[c for c in ot.componentes_detalle if (c.condicion_ingreso or '').strip().casefold()=='recibido'],marcas_guardadas=marcas_guardadas)
 
@@ -1322,6 +1338,40 @@ def preparar_foto_salida(upload):
     except Exception:
         return None, None, None
 
+@app.route('/ot/<int:ot_id>/informe-salida/estado', methods=['POST'])
+@permiso_required('diagnostico')
+def salida_estado_guardar(ot_id):
+    ot=db.session.get(OT,ot_id) or abort(404)
+    if not salida_aprobada(ot):
+        flash('El informe de salida requiere cotización vigente aprobada.')
+        return redirect(url_for('ver_ot',ot_id=ot.id))
+    accion=(request.form.get('accion') or '').strip()
+    if accion not in ('guardar','terminar','editar'):
+        abort(400)
+    registro=InformeSalidaEstado.query.filter_by(ot_id=ot.id).first()
+    if not registro:
+        registro=InformeSalidaEstado(ot_id=ot.id)
+        db.session.add(registro)
+    if accion=='terminar':
+        if not any((h.trabajo_recomendado or '').strip() for h in ot.salidas):
+            flash('Registre al menos un trabajo realizado antes de terminar el informe.')
+            return redirect(url_for('salida_ot',ot_id=ot.id))
+        registro.estado='Terminado'
+        mensaje='Informe marcado como terminado. Puede editarlo posteriormente.'
+    elif accion=='editar':
+        registro.estado='En preparación'
+        mensaje='Informe habilitado para edición.'
+    else:
+        # Guardar el estado sin marcar el informe como terminado.
+        if registro.estado!='Terminado': registro.estado='En preparación'
+        mensaje='Estado del informe guardado.'
+    registro.actualizado=datetime.utcnow()
+    registro.actualizado_por=usuario_actual().nombre
+    db.session.commit()
+    audit('Estado informe de salida',f'{ot.numero} / {registro.estado}')
+    flash(mensaje)
+    return redirect(url_for('salida_ot',ot_id=ot.id))
+
 @app.route('/ot/<int:ot_id>/informe-salida', methods=['GET','POST'])
 @permiso_required('diagnostico')
 def salida_ot(ot_id):
@@ -1352,7 +1402,7 @@ def salida_ot(ot_id):
         flash('Trabajo realizado guardado. Puede seguir completando el informe.')
         return redirect(url_for('salida_ot',ot_id=ot.id))
     marcas_guardadas={m.hallazgo_id:json.loads(m.marcas_json or '[]') for m in SalidaMarca.query.filter(SalidaMarca.hallazgo_id.in_([h.id for h in ot.salidas])).all()} if ot.salidas else {}
-    return render_template('informe_salida.html',ot=ot,componentes_recibidos=[c for c in ot.componentes_detalle if (c.condicion_ingreso or '').strip().casefold()=='recibido'],marcas_guardadas=marcas_guardadas,diagnosticos=salida_diagnosticos(ot))
+    return render_template('informe_salida.html',ot=ot,componentes_recibidos=[c for c in ot.componentes_detalle if (c.condicion_ingreso or '').strip().casefold()=='recibido'],marcas_guardadas=marcas_guardadas,diagnosticos=salida_diagnosticos(ot),informe_estado=(informe_estado.estado if informe_estado else ('En preparación' if ot.salidas else 'Pendiente')))
 
 @app.route('/informe-salida/hallazgo/<int:hid>/marcas',methods=['POST'])
 @permiso_required('diagnostico')

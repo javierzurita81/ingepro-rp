@@ -3802,72 +3802,102 @@ def ingenieria_anular(iid):
 @app.route('/ingenieria/<int:iid>/pdf')
 @permiso_required('ingenieria')
 def ingenieria_pdf(iid):
-    informe=db.session.get(InformeIngenieria,iid) or abort(404)
-    d=informe.datos; ot=informe.ot
-    from reportlab.lib.enums import TA_CENTER
-    from reportlab.lib.utils import ImageReader
-    from reportlab.lib.styles import ParagraphStyle
+    informe = db.session.get(InformeIngenieria, iid) or abort(404)
+    d, ot = informe.datos, informe.ot
     from reportlab.lib import colors as C
+    from reportlab.lib.enums import TA_CENTER
+    from reportlab.lib.styles import ParagraphStyle
     from reportlab.lib.units import mm
-    styles=getSampleStyleSheet()
-    normal=ParagraphStyle('ingNormal',parent=styles['Normal'],fontName='Helvetica',fontSize=8,leading=11,spaceAfter=0)
-    small=ParagraphStyle('ingSmall',parent=normal,fontSize=7,leading=9)
-    heading=ParagraphStyle('ingHeading',parent=normal,fontName='Helvetica-Bold',textColor=C.HexColor('#19344f'),fontSize=9,leading=12)
-    def p(v,sty=normal): return Paragraph(xml_escape(str(v or '—')).replace('\n','<br/>'),sty)
-    def tabla(pares):
-        rows=[[p(a,small),p(b,small)] for a,b in pares]
-        t=Table(rows,colWidths=[53*mm,125*mm],hAlign='LEFT')
-        t.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'TOP'),('BACKGROUND',(0,0),(0,-1),C.HexColor('#e9eef3')),('LINEBELOW',(0,0),(-1,-1),0.3,C.HexColor('#ccd5df')),('LEFTPADDING',(0,0),(-1,-1),6),('RIGHTPADDING',(0,0),(-1,-1),6),('TOPPADDING',(0,0),(-1,-1),4),('BOTTOMPADDING',(0,0),(-1,-1),4)]))
+    from reportlab.platypus import KeepTogether
+    blue=C.HexColor('#174C75'); pale=C.HexColor('#EAF0F5'); grey=C.HexColor('#5D6B78')
+    line=C.HexColor('#D7E0E8'); white=C.white
+    body=ParagraphStyle('b',fontName='Helvetica',fontSize=8,leading=11)
+    label=ParagraphStyle('l',parent=body,fontName='Helvetica-Bold',fontSize=7,textColor=grey)
+    strong=ParagraphStyle('s',parent=body,fontName='Helvetica-Bold',textColor=blue)
+    tiny=ParagraphStyle('t',parent=body,fontSize=7,leading=9)
+    center=ParagraphStyle('c',parent=body,alignment=TA_CENTER)
+    def para(v,style=body):
+        return Paragraph(xml_escape(str(v if v is not None and str(v)!='' else '—')).replace('\n','<br/>'),style)
+    def section(n,name):
+        t=Table([[para(n+' | '+name,ParagraphStyle('sec'+n,parent=strong,textColor=white,fontSize=9))]],colWidths=[178*mm])
+        t.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),blue),('TOPPADDING',(0,0),(-1,-1),7),('BOTTOMPADDING',(0,0),(-1,-1),7)]))
+        return [Spacer(1,5*mm),t,Spacer(1,2*mm)]
+    def kv(items):
+        rows=[]
+        for j in range(0,len(items),2):
+            pair=items[j:j+2]
+            row=[]
+            for k,v in pair:row.append([para(k,label),para(v,body)])
+            if len(pair)==1:row.append('')
+            rows.append(row)
+        t=Table(rows,colWidths=[89*mm,89*mm],hAlign='LEFT')
+        t.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'TOP'),('LINEBELOW',(0,0),(-1,-1),.35,line),('LEFTPADDING',(0,0),(-1,-1),7),('TOPPADDING',(0,0),(-1,-1),5),('BOTTOMPADDING',(0,0),(-1,-1),5)]))
         return t
-    def titulo(t): return [Spacer(1,4*mm),p(t,heading),Spacer(1,2*mm)]
-    def foto(blob):
-        if not blob:return p('SIN FOTOGRAFÍA',small)
-        im=PILImage.open(BytesIO(blob));w,h=im.size
-        escala=min(82*mm/w,62*mm/h)
-        return Image(BytesIO(blob),width=w*escala,height=h*escala)
-    story=[]
-    logo=Path(app.root_path)/'static'/'img'/'logo-ingepro.png'
-    if logo.exists():
+    def measurements(items):
+        rows=[[para('PARÁMETRO',label),para('VALOR REGISTRADO',label)]]+[[para(k),para(v,strong)] for k,v in items]
+        t=Table(rows,colWidths=[95*mm,83*mm],repeatRows=1)
+        t.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),pale),('LINEBELOW',(0,0),(-1,-1),.4,line),('VALIGN',(0,0),(-1,-1),'MIDDLE'),('TOPPADDING',(0,0),(-1,-1),6),('BOTTOMPADDING',(0,0),(-1,-1),6)]))
+        return t
+    def photo(blob):
+        if not blob:return para('SIN FOTOGRAFÍA',center)
         try:
-            im=PILImage.open(logo);w,h=im.size;ratio=min(43*mm/w,15*mm/h)
-            story.append(Image(str(logo),width=w*ratio,height=h*ratio))
-        except OSError: pass
-    story += [p('INGEPRO | DIVISIÓN INGENIERÍA',heading),p('INFORME TÉCNICO DE BALANCEO DINÁMICO',heading),
-      p(f'N.º {informe.numero}  |  OT {ot.numero}  |  FECHA {informe.fecha.strftime("%d/%m/%Y")}  |  ESTADO {informe.estado}',small)]
-    story+=titulo('01. IDENTIFICACIÓN GENERAL')
-    story.append(tabla([('CLIENTE',ot.cliente),('EQUIPO / OT',ot.equipo),('ELEMENTO',informe.tipo),('DESCRIPCIÓN',d.get('descripcion') or ot.componente),('N.º TARJETA',d.get('tarjeta') or ot.serie),('ANALISTA',d.get('analista') or ING_ANALISTA['nombre']),('CÓDIGO BALANCEADORA',d.get('codigo_balance')),('MODO DE FALLA',d.get('modo_falla')),('RESPONSABLE CLIENTE',d.get('responsable')),('CORREO / ÁREA',f"{d.get('correo','')} / {d.get('area','')} / {d.get('subarea','')}"),('CARGO',d.get('cargo')),('PRIORIDAD',d.get('prioridad'))]))
-    story+=titulo('02. REGISTRO FOTOGRÁFICO')
-    ftab=Table([[foto(informe.foto1),foto(informe.foto2)],[p(d.get('foto1_pie') or 'FOTOGRAFÍA 01',small),p(d.get('foto2_pie') or 'FOTOGRAFÍA 02',small)]],colWidths=[89*mm,89*mm],hAlign='LEFT')
-    ftab.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'MIDDLE'),('ALIGN',(0,0),(-1,0),'CENTER'),('BOX',(0,0),(-1,-1),0.4,C.HexColor('#cbd5e1')),('INNERGRID',(0,0),(-1,-1),0.4,C.HexColor('#cbd5e1')),('TOPPADDING',(0,0),(-1,-1),5),('BOTTOMPADDING',(0,0),(-1,-1),5)]))
-    story.append(ftab)
-    story+=titulo('03. DATOS TÉCNICOS DE BALANCEO')
-    story.append(tabla([('PESO DEL ELEMENTO',d.get('peso_equipo')),('RPM / PLANOS',f"{d.get('rpm','')} / {d.get('planos','')}"),('DIÁMETRO / RADIO CORRECCIÓN',f"{d.get('diametro','')} / {d.get('radio','')}"),('N.º ÁLABES / PESO PRUEBA',f"{d.get('alabes','')} / {d.get('peso_prueba','')}"),('AMPLITUD RMS / APOYO',f"{d.get('rms','')} / {d.get('apoyo','')}")]))
+            im=PILImage.open(BytesIO(blob)); im.thumbnail((950,650)); im=im.convert('RGB')
+            tmp=BytesIO();im.save(tmp,format='JPEG',quality=78,optimize=True);tmp.seek(0)
+            w,h=im.size;scale=min(79*mm/w,49*mm/h)
+            return Image(tmp,width=w*scale,height=h*scale)
+        except Exception:return para('FOTOGRAFÍA NO DISPONIBLE',center)
+    def header(subtitle):
+        logo=Path(app.root_path)/'static'/'img'/'logo-ingepro.png'
+        if logo.exists():
+            try:
+                im=PILImage.open(logo);w,h=im.size;scale=min(44*mm/w,14*mm/h)
+                mark=Image(str(logo),width=w*scale,height=h*scale)
+            except Exception:mark=para('INGEPRO',strong)
+        else:mark=para('INGEPRO',strong)
+        t=Table([[mark,[para('INFORME TÉCNICO DE BALANCEO DINÁMICO',strong),para(subtitle,tiny),para(informe.numero,tiny)]]],colWidths=[57*mm,121*mm])
+        t.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'MIDDLE'),('ALIGN',(1,0),(1,0),'RIGHT'),('LINEBELOW',(0,0),(-1,-1),2,blue),('BOTTOMPADDING',(0,0),(-1,-1),10)]))
+        return t
+    story=[header('DIVISIÓN INGENIERÍA'),Spacer(1,3*mm)]
+    story.append(kv([('ORDEN DE TRABAJO',ot.numero),('FECHA',informe.fecha.strftime('%d/%m/%Y')),('ESTADO DEL INFORME',informe.estado),('N.º DE INFORME',informe.numero)]))
+    story+=section('01','IDENTIFICACIÓN GENERAL')
+    story.append(kv([('CLIENTE',ot.cliente),('EQUIPO',ot.equipo),('ELEMENTO',informe.tipo),('N.º TARJETA',d.get('tarjeta') or ot.serie),('DESCRIPCIÓN',d.get('descripcion') or ot.componente),('MODO DE FALLA',d.get('modo_falla')),('ANALISTA',d.get('analista') or ING_ANALISTA['nombre']),('REGISTRO ANALISTA DE VIBRACIONES','3894-2026'),('RESPONSABLE CLIENTE',d.get('responsable')),('CARGO',d.get('cargo')),('CORREO',d.get('correo')),('ÁREA / SUBÁREA',str(d.get('area') or '—')+' / '+str(d.get('subarea') or '—')),('PRIORIDAD',d.get('prioridad')),('CÓDIGO BALANCEADORA',d.get('codigo_balance'))]))
+    story+=section('02','REGISTRO FOTOGRÁFICO')
+    f=Table([[photo(informe.foto1),photo(informe.foto2)],[para(d.get('foto1_pie') or 'FIG. 01 · ELEMENTO',tiny),para(d.get('foto2_pie') or 'FIG. 02 · REGISTRO DE BALANCEO',tiny)]],colWidths=[89*mm,89*mm])
+    f.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'MIDDLE'),('ALIGN',(0,0),(-1,0),'CENTER'),('BOX',(0,0),(-1,-1),.4,line),('INNERGRID',(0,0),(-1,-1),.4,line),('TOPPADDING',(0,0),(-1,0),7),('BOTTOMPADDING',(0,0),(-1,-1),7)]))
+    story.append(f)
+    story+=section('03','DATOS TÉCNICOS DEL ENSAYO')
+    story.append(kv([('PESO DEL ELEMENTO',d.get('peso_equipo')),('VELOCIDAD (RPM)',d.get('rpm')),('DIÁMETRO',d.get('diametro')),('RADIO DE CORRECCIÓN',d.get('radio')),('PLANOS',d.get('planos')),('N.º ÁLABES',d.get('alabes')),('PESO DE PRUEBA',d.get('peso_prueba')),('AMPLITUD RMS',d.get('rms')),('TIPO DE APOYO',d.get('apoyo'))]))
     story.append(PageBreak())
-    story += [p('INGEPRO | DIVISIÓN INGENIERÍA',heading),p(f'RESULTADOS Y CONCLUSIONES  |  {informe.numero}',heading)]
-    story+=titulo('04. RESULTADOS DE BALANCEO')
-    story.append(tabla([('DESEQUILIBRIO INICIAL',d.get('desequilibrio_1')),('DESEQUILIBRIO 2',d.get('desequilibrio_2')),('DESEQUILIBRIO 3',d.get('desequilibrio_3')),('DESEQUILIBRIO PERMISIBLE',d.get('desequilibrio_permitido')),('GRADO DE CALIDAD',d.get('grado')),('MASA DE CORRECCIÓN',d.get('masa_correccion'))]))
-    story+=titulo('05. COMENTARIOS Y NORMA')
-    story.extend([p(d.get('comentarios')),Spacer(1,2*mm),p('NORMA: '+(d.get('norma') or 'NO INDICADA'))])
-    story+=titulo('06. RECOMENDACIÓN Y CIERRE')
-    story.extend([p('RECOMENDACIÓN: '+(d.get('recomendacion') or '—')),Spacer(1,2*mm),p('CIERRE: '+(d.get('cierre') or '—'))])
-    story+=titulo('07. RESPONSABLE TÉCNICO')
+    story.extend([header('RESULTADOS Y CONCLUSIONES')])
+    story+=section('04','RESULTADOS DE BALANCEO')
+    story.append(measurements([('DESEQUILIBRIO INICIAL',d.get('desequilibrio_1')),('DESEQUILIBRIO INTERMEDIO 2',d.get('desequilibrio_2')),('DESEQUILIBRIO RESIDUAL REGISTRADO',d.get('desequilibrio_3')),('DESEQUILIBRIO PERMISIBLE',d.get('desequilibrio_permitido')),('GRADO DE CALIDAD',d.get('grado')),('MASA DE CORRECCIÓN',d.get('masa_correccion'))]))
+    story+=section('05','COMENTARIOS Y REFERENCIA NORMATIVA')
+    story.extend([para(d.get('comentarios')),Spacer(1,2*mm),para('NORMA DECLARADA: '+str(d.get('norma') or 'NO INDICADA'),strong)])
+    story+=section('06','RECOMENDACIÓN Y CIERRE')
+    story.extend([para('RECOMENDACIÓN: '+str(d.get('recomendacion') or '—')),Spacer(1,2*mm),para('CIERRE: '+str(d.get('cierre') or '—'))])
+    story+=section('07','RESPONSABLE TÉCNICO')
     if informe.estado=='FINALIZADO' and informe.firma_datos_json:
         firma=json.loads(informe.firma_datos_json)
-        story.append(tabla([('NOMBRE',firma.get('nombre')),('PROFESIÓN',firma.get('profesion')),('RUT',firma.get('rut')),('CERTIFICACIÓN',firma.get('categoria')),('CÓDIGO DE CERTIFICACIÓN',firma.get('codigo')),('FIRMADO EL',informe.firmado_fecha.strftime('%d/%m/%Y %H:%M UTC') if informe.firmado_fecha else '')]))
+        story.append(kv([('NOMBRE',firma.get('nombre')),('PROFESIÓN',firma.get('profesion')),('RUT',firma.get('rut')),('CERTIFICACIÓN',firma.get('categoria')),('REGISTRO ANALISTA DE VIBRACIONES','3894-2026'),('CÓDIGO DE CERTIFICACIÓN',firma.get('codigo')),('FECHA DE FIRMA',informe.firmado_fecha.strftime('%d/%m/%Y %H:%M UTC') if informe.firmado_fecha else '—')]))
     else:
-        story.append(p('DOCUMENTO EN BORRADOR / EN PROCESO. SIN FIRMA NI APROBACIÓN TÉCNICA.',heading))
-    story+=titulo('08. PERSONAL DE INSPECCIÓN')
-    for k,label in [('realizado','REALIZADO POR'),('revisado','REVISADO POR'),('aprobado','APROBADO POR')]:
-        story.append(p(f"{label}: {d.get(k+'_por') or '—'} | CARGO: {d.get(k+'_cargo') or '—'} | CORREO: {d.get(k+'_correo') or '—'} | TEL.: {d.get(k+'_telefono') or '—'}",small))
-        story.append(Spacer(1,3*mm))
-    def pie(canvas,doc):
-        canvas.saveState();canvas.setFont('Helvetica',7);canvas.setFillColor(C.HexColor('#64748b'))
-        canvas.drawString(16*mm,12*mm,'INGEPRO · INFORME DE INGENIERÍA'+(' · NO FIRMADO' if informe.estado!='FINALIZADO' else ' · FIRMADO'))
-        canvas.drawRightString(194*mm,12*mm,f'PÁGINA {doc.page}')
+        story.append(para('JAVIER ZURITA ARAYA · INGENIERO MECÁNICO · ANALISTA DE VIBRACIONES · REGISTRO 3894-2026',strong))
+        story.append(para('DOCUMENTO EN BORRADOR / EN PROCESO. SIN FIRMA NI APROBACIÓN TÉCNICA.',tiny))
+    story+=section('08','PERSONAL DE INSPECCIÓN')
+    cells=[]
+    for k,title in [('realizado','REALIZADO POR'),('revisado','REVISADO POR'),('aprobado','APROBADO POR')]:
+        cells.append([para(title,strong),Spacer(1,3*mm),para(d.get(k+'_por')),para(d.get(k+'_cargo'),tiny),Spacer(1,8*mm),para('FIRMA: __________________',tiny)])
+    signatures=Table([cells],colWidths=[178*mm/3]*3)
+    signatures.setStyle(TableStyle([('BOX',(0,0),(-1,-1),.4,line),('INNERGRID',(0,0),(-1,-1),.4,line),('VALIGN',(0,0),(-1,-1),'TOP'),('TOPPADDING',(0,0),(-1,-1),8),('BOTTOMPADDING',(0,0),(-1,-1),8)]))
+    story.append(signatures)
+    def footer(canvas,doc):
+        canvas.saveState();canvas.setStrokeColor(line);canvas.line(16*mm,15*mm,194*mm,15*mm)
+        canvas.setFillColor(grey);canvas.setFont('Helvetica',7)
+        canvas.drawString(16*mm,11*mm,'INGEPRO · DIVISIÓN INGENIERÍA · '+('FIRMADO' if informe.estado=='FINALIZADO' else 'NO FIRMADO'))
+        canvas.drawRightString(194*mm,11*mm,f'PÁGINA {doc.page}')
         canvas.restoreState()
     buf=BytesIO()
-    pdf=SimpleDocTemplate(buf,pagesize=A4,leftMargin=16*mm,rightMargin=16*mm,topMargin=13*mm,bottomMargin=17*mm,title=f'INGEPRO {informe.numero}')
-    pdf.build(story,onFirstPage=pie,onLaterPages=pie)
+    pdf=SimpleDocTemplate(buf,pagesize=A4,leftMargin=16*mm,rightMargin=16*mm,topMargin=13*mm,bottomMargin=19*mm,title=f'INGEPRO {informe.numero}')
+    pdf.build(story,onFirstPage=footer,onLaterPages=footer)
     buf.seek(0)
     return send_file(buf,mimetype='application/pdf',as_attachment=False,download_name=f'INGEPRO_{informe.numero}.pdf')
 

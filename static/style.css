@@ -96,3 +96,25 @@ header{min-height:72px;background:#fff;border-bottom:3px solid #0b6596;box-shado
 .diag-photo-extra .diag-photo-stage{margin-bottom:8px}
 .diag-photo-extra .diag-tools{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px}
 .diag-photo-upload{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
+
+/* INGEPRO RP V8.01 - Corrección exclusiva del Visor de OT.
+   Las nuevas columnas de despacho/entrega requieren anchos propios. */
+.ot-compact-panel .ot-tablewrap{overflow-x:auto;overflow-y:hidden;max-width:100%}
+.ot-compact-panel .ot-list-table{table-layout:fixed;width:1540px;min-width:1540px;border-spacing:0 5px}
+.ot-compact-panel .ot-list-table col.col-ot{width:125px}
+.ot-compact-panel .ot-list-table col.col-equipo{width:230px}
+.ot-compact-panel .ot-list-table col.col-cliente{width:125px}
+.ot-compact-panel .ot-list-table col.col-otcliente{width:105px}
+.ot-compact-panel .ot-list-table col.col-cot{width:115px}
+.ot-compact-panel .ot-list-table col.col-precio{width:110px}
+.ot-compact-panel .ot-list-table col.col-estado{width:125px}
+.ot-compact-panel .ot-list-table col.col-despacho{width:160px}
+.ot-compact-panel .ot-list-table col.col-recepcion{width:165px}
+.ot-compact-panel .ot-list-table col.col-envio{width:100px}
+.ot-compact-panel .ot-list-table col.col-por{width:90px}
+.ot-compact-panel .ot-list-table col.col-entrega{width:90px}
+.ot-compact-panel .ot-list-table td{overflow-wrap:normal;word-break:normal;vertical-align:middle}
+.ot-compact-panel .ot-list-table th{overflow-wrap:normal;word-break:normal}
+.ot-compact-panel .ot-list-table .ot-list-state{white-space:normal;overflow-wrap:normal;word-break:normal;max-width:none}
+.ot-compact-panel .ot-list-table td:nth-child(8),
+.ot-compact-panel .ot-list-table td:nth-child(9){white-space:normal;word-break:normal}

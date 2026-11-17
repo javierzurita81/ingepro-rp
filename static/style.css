@@ -118,3 +118,29 @@ header{min-height:72px;background:#fff;border-bottom:3px solid #0b6596;box-shado
 .ot-compact-panel .ot-list-table .ot-list-state{white-space:normal;overflow-wrap:normal;word-break:normal;max-width:none}
 .ot-compact-panel .ot-list-table td:nth-child(8),
 .ot-compact-panel .ot-list-table td:nth-child(9){white-space:normal;word-break:normal}
+
+/* INGEPRO RP V8.02 - Pestañas corporativas, alcance exclusivo del encabezado */
+header.rp-header{height:auto!important;min-height:0!important;display:block!important;padding:0!important;background:#fff!important;color:#173042!important;border-bottom:3px solid #0b6596!important;box-shadow:0 3px 14px rgba(20,40,55,.08)}
+.rp-header .rp-header-top{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:8px clamp(14px,3vw,50px)}
+.rp-header .brand{flex:0 1 auto;min-width:0}
+.rp-header .brand img{width:150px;max-height:54px;object-fit:contain}
+.rp-header .brand span{display:flex;flex-direction:column;color:#123}
+.rp-header .brand b{font-size:22px;line-height:1.1;color:#142c40}
+.rp-header .brand small{font-size:11px;color:#607080;letter-spacing:.3px}
+.rp-user-actions{display:flex;align-items:center;gap:16px;min-width:0}
+.rp-user-actions a{color:#0b6596!important;font-size:12px;font-weight:700;text-decoration:none;white-space:nowrap}
+.rp-user-actions .userpill{max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rp-tab-nav{display:block!important;min-width:0}
+.rp-tabs{display:flex;align-items:flex-end;gap:3px;padding:5px clamp(10px,3vw,50px) 0;background:#f0f1f2;border-bottom:1px solid #b7c1c9;overflow-x:auto;scrollbar-width:thin}
+.rp-tabs .rp-tab{appearance:none;display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;min-height:34px;margin:0 0 -1px;padding:7px 15px!important;background:#e6e9eb!important;border:1px solid #b7c1c9!important;border-radius:8px 8px 0 0!important;color:#213b4a!important;font:600 12px Arial,sans-serif!important;line-height:1.2;white-space:nowrap;box-shadow:none!important;cursor:pointer}
+.rp-tabs .rp-tab.is-active{background:#fff!important;border-bottom-color:#fff!important;color:#0b6596!important;position:relative;z-index:1}
+.rp-tabs .rp-tab:hover:not(.is-active){background:#f5f7f8!important}
+.rp-tabs .rp-tab:focus-visible{outline:2px solid #0b6596;outline-offset:-3px}
+.rp-subnav{min-height:36px;background:#fff;padding:7px clamp(10px,3vw,50px)}
+.rp-subpanel{display:flex;align-items:center;gap:0;flex-wrap:wrap;min-height:20px}
+.rp-subpanel[hidden]{display:none!important}
+.rp-subpanel a{display:inline-block;color:#175b84!important;font-size:12px;font-weight:600;text-decoration:none;line-height:20px;white-space:nowrap;padding:0 13px;border-right:1px solid #cbd5dc}
+.rp-subpanel a:first-child{padding-left:0}
+.rp-subpanel a:last-child{border-right:0}
+.rp-subpanel a:hover{text-decoration:underline}
+@media(max-width:760px){.rp-header .rp-header-top{padding:8px 12px}.rp-header .brand img{width:110px}.rp-header .brand b{font-size:15px}.rp-header .brand small{font-size:9px}.rp-user-actions .userpill{max-width:100px}.rp-tabs .rp-tab{padding:8px 11px!important}.rp-subnav{padding:8px 12px}.rp-subpanel a{padding:2px 9px}}

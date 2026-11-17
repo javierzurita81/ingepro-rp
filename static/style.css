@@ -190,3 +190,44 @@ header.rp-header .rp-tabs .rp-tab{font-size:14px!important;font-weight:600!impor
 .ot-compact-panel.prices-hidden .ot-list-table td.ot-money{font-size:0!important}
 .ot-compact-panel.prices-hidden .ot-list-table td.ot-money::after{content:"••••••";font-size:12px;letter-spacing:2px;color:#637888}
 @media(max-width:650px){.ot-price-control{width:100%;justify-content:flex-end}}
+
+
+/* INGEPRO RP V8.06 — navegación compacta, sin cambios funcionales. */
+header.rp-header .rp-header-top{padding-top:5px!important;padding-bottom:5px!important}
+header.rp-header .brand img{width:126px!important;max-height:43px!important}
+header.rp-header .brand b{font-size:18px!important;line-height:1.1!important}
+header.rp-header .brand small{font-size:10px!important;letter-spacing:0!important}
+header.rp-header .rp-tabs{max-width:none!important;min-height:36px!important;gap:4px!important;padding-top:5px!important}
+header.rp-header .rp-tabs .rp-tab{height:32px!important;min-height:32px!important;font-size:12px!important;font-weight:600!important;line-height:16px!important;padding:7px 12px!important;border-radius:8px 8px 0 0!important}
+header.rp-header .rp-subnav{min-height:0!important;padding:8px clamp(14px,3vw,50px)!important}
+header.rp-header .rp-subpanel{min-height:0!important;gap:7px!important;justify-content:center!important;flex-wrap:wrap!important}
+header.rp-header .rp-subpanel a,
+header.rp-header .rp-subpanel a:first-child,
+header.rp-header .rp-subpanel a:last-child{
+ display:inline-flex!important;align-items:center!important;justify-content:center!important;
+ border:1px solid #b9c6ce!important;border-radius:6px!important;
+ background:#eef1f3!important;color:#174c6c!important;
+ font-size:11px!important;font-weight:600!important;line-height:16px!important;
+ min-height:28px!important;padding:5px 11px!important;margin:0!important;
+ text-decoration:none!important;white-space:nowrap!important;
+ box-shadow:none!important;transition:background-color .15s ease,border-color .15s ease;
+}
+header.rp-header .rp-subpanel a:hover{background:#fff!important;border-color:#0b6596!important;color:#0b6596!important}
+header.rp-header .rp-subpanel a:focus-visible{outline:2px solid #0b6596!important;outline-offset:2px!important}
+header.rp-header .rp-tab-nav.rp-home-active .rp-subnav{display:none!important}
+/* Recupera las proporciones compactas de las tarjetas sin afectar la tabla OT. */
+.module-grid{gap:12px!important;align-items:stretch!important}
+.module-grid .module-card{box-sizing:border-box!important;min-height:120px!important;height:100%!important;padding:14px 16px!important;border-radius:10px!important}
+.module-grid .module-card b{font-size:14px!important;line-height:1.3!important;font-weight:700!important}
+.module-grid .module-card span{font-size:12px!important;line-height:1.4!important;margin:7px 0!important}
+.module-grid .module-card strong{font-size:11px!important;line-height:1.3!important}
+@media(max-width:850px){
+ header.rp-header .rp-tabs{justify-content:flex-start!important}
+ header.rp-header .rp-tabs .rp-tab{font-size:11px!important;padding:7px 10px!important}
+ header.rp-header .rp-subpanel{justify-content:flex-start!important}
+}
+@media(max-width:650px){
+ header.rp-header .brand img{width:105px!important}
+ header.rp-header .brand b{font-size:15px!important}
+ .module-grid .module-card{min-height:108px!important}
+}

@@ -41,7 +41,7 @@ db = SQLAlchemy(app)
 PERMISOS = {
  'ingreso':'Ingreso de equipos', 'diagnostico':'Diagnóstico', 'cotizaciones':'Cotizaciones',
  'reparacion':'Reparación', 'calidad':'Control de calidad', 'despacho':'Embalaje y despacho',
- 'informes':'Informes', 'ingenieria':'Ingeniería', 'maestros':'Maestros', 'clientes':'Clientes y contactos', 'planificacion':'Planificación', 'produccion':'Control de producción (jefaturas)', 'usuarios':'Administración de usuarios'
+ 'informes':'Informes', 'ingenieria':'Ingeniería', 'maestros':'Maestros', 'clientes':'Clientes y contactos', 'planificacion':'Planificación', 'produccion':'Control de producción (jefaturas)', 'usuarios':'Administración de usuarios', 'entregas':'Control de entregas'
 }
 
 class Usuario(db.Model):
@@ -65,7 +65,7 @@ class Usuario(db.Model):
         if self.es_admin: return True
         if (self.rol or '').strip().casefold()=='supervisor de producción': return p in ('ingreso','diagnostico','planificacion','produccion')
         permisos=set(self.permisos)
-        aliases={'usuarios':{'administracion'}, 'clientes':{'maestros'}}
+        aliases={'usuarios':{'administracion'}, 'clientes':{'maestros'}, 'entregas':{'despacho','administracion'}}
         return p in permisos or bool(aliases.get(p,set()) & permisos)
 
 class ReparacionMaestra(db.Model):
@@ -209,6 +209,18 @@ class GuiaDespachoItem(db.Model):
     componente_id=db.Column(db.Integer,db.ForeignKey('ot_componente.id'),nullable=False,index=True)
     cantidad=db.Column(db.Integer,default=1,nullable=False)
     __table_args__=(db.UniqueConstraint('guia_id','componente_id',name='uq_guia_componente'),)
+
+class EntregaComponente(db.Model):
+    """Confirmación manual de recepción por componente, independiente del despacho."""
+    __tablename__='entrega_componente'
+    id=db.Column(db.Integer,primary_key=True)
+    componente_id=db.Column(db.Integer,db.ForeignKey('ot_componente.id'),nullable=False,unique=True,index=True)
+    guia_item_id=db.Column(db.Integer,db.ForeignKey('guia_despacho_item.id'),nullable=False)
+    confirmado_por=db.Column(db.Integer,db.ForeignKey('usuario.id'),nullable=False)
+    fecha_entrega=db.Column(db.Date,nullable=False)
+    fecha_registro=db.Column(db.DateTime,default=datetime.utcnow,nullable=False)
+    recibido_por=db.Column(db.String(160),nullable=False)
+    observacion=db.Column(db.Text)
 
 class DiagnosticoHallazgo(db.Model):
     id=db.Column(db.Integer, primary_key=True)
@@ -2176,9 +2188,63 @@ def gd_disponibles(cliente,guia_id=None):
     if guia_id is not None:
         ocupados=ocupados.filter(GuiaDespacho.id!=guia_id)
     bloqueados={r[0] for r in ocupados.all()}
+    bloqueados.update(r[0] for r in db.session.query(EntregaComponente.componente_id).all())
     ots=OT.query.filter_by(cliente=cliente).order_by(OT.id.desc()).limit(250).all()
     return [(ot,[c for c in ot.componentes_detalle if (c.condicion_ingreso or '').strip().casefold()=='recibido' and c.id not in bloqueados])
             for ot in ots if not gd_ot_entregada(ot) and gd_informe_terminado(ot)]
+
+# V7.99 — Entrega confirmada manualmente por Administración.
+def entrega_estado_ot(ot):
+    recibidos=[c for c in ot.componentes_detalle if (c.condicion_ingreso or '').strip().casefold()=='recibido']
+    if not recibidos: return 'Sin componentes'
+    entregados={e.componente_id for e in EntregaComponente.query.filter(EntregaComponente.componente_id.in_([c.id for c in recibidos])).all()}
+    if len(entregados)==len(recibidos): return 'ENTREGADA COMPLETA'
+    if entregados: return 'ENTREGADA INCOMPLETA'
+    despachados={i.componente_id for i in GuiaDespachoItem.query.join(GuiaDespacho).filter(GuiaDespacho.estado=='Despachada',GuiaDespachoItem.ot_id==ot.id).all()}
+    return 'DESPACHADA' if despachados else 'PENDIENTE'
+
+@app.route('/administracion/control-entregas')
+@permiso_required('entregas')
+def control_entregas():
+    guias=GuiaDespacho.query.filter_by(estado='Despachada').order_by(GuiaDespacho.fecha.desc(),GuiaDespacho.id.desc()).limit(250).all()
+    ids={i.componente_id for g in guias for i in g.items}
+    entregas={e.componente_id:e for e in EntregaComponente.query.filter(EntregaComponente.componente_id.in_(ids)).all()} if ids else {}
+    ots={o.id:o for o in OT.query.filter(OT.id.in_({i.ot_id for g in guias for i in g.items})).all()} if guias else {}
+    componentes={c.id:c for c in OTComponente.query.filter(OTComponente.id.in_(ids)).all()} if ids else {}
+    return render_template('control_entregas.html',guias=guias,entregas=entregas,ots=ots,componentes=componentes,estados={oid:entrega_estado_ot(ot) for oid,ot in ots.items()},hoy=date.today().isoformat())
+
+@app.route('/administracion/control-entregas/<int:item_id>/confirmar',methods=['POST'])
+@permiso_required('entregas')
+def entrega_confirmar(item_id):
+    item=db.session.get(GuiaDespachoItem,item_id) or abort(404)
+    if item.guia.estado!='Despachada': abort(400)
+    if EntregaComponente.query.filter_by(componente_id=item.componente_id).first():
+        flash('Este componente ya fue entregado.'); return redirect(url_for('control_entregas'))
+    recibido=(request.form.get('recibido_por') or '').strip()
+    if not recibido:
+        flash('Indique quién recibió el componente.'); return redirect(url_for('control_entregas'))
+    try: fecha=date.fromisoformat(request.form.get('fecha_entrega') or '')
+    except ValueError:
+        flash('Fecha de entrega inválida.'); return redirect(url_for('control_entregas'))
+    if fecha<item.guia.fecha or fecha>date.today():
+        flash('La fecha de entrega debe estar entre el despacho y hoy.'); return redirect(url_for('control_entregas'))
+    db.session.add(EntregaComponente(componente_id=item.componente_id,guia_item_id=item.id,confirmado_por=usuario_actual().id,fecha_entrega=fecha,recibido_por=recibido[:160],observacion=(request.form.get('observacion') or '').strip()[:1000]))
+    db.session.commit()
+    audit('Entrega confirmada',f'{item.guia.numero} componente={item.componente_id} recibe={recibido} fecha={fecha}')
+    flash('Entrega confirmada. El componente queda excluido de futuros despachos.'); return redirect(url_for('control_entregas'))
+
+@app.route('/administracion/control-entregas/<int:item_id>/revertir',methods=['POST'])
+@permiso_required('entregas')
+def entrega_revertir(item_id):
+    if not usuario_actual().es_admin: abort(403)
+    item=db.session.get(GuiaDespachoItem,item_id) or abort(404)
+    entrega=EntregaComponente.query.filter_by(componente_id=item.componente_id,guia_item_id=item.id).first() or abort(404)
+    motivo=(request.form.get('motivo') or '').strip()
+    if len(motivo)<8:
+        flash('La reversión requiere un motivo de al menos 8 caracteres.'); return redirect(url_for('control_entregas'))
+    detalle=f'{item.guia.numero} componente={item.componente_id} entrega={entrega.fecha_entrega} motivo={motivo[:500]}'
+    db.session.delete(entrega); db.session.commit(); audit('Entrega revertida por administrador',detalle)
+    flash('Entrega revertida; se conserva registro de auditoría.'); return redirect(url_for('control_entregas'))
 
 @app.route('/guias-despacho')
 @permiso_required('despacho')
@@ -2222,7 +2288,7 @@ def guia_editar(gid):
     guia=db.session.get(GuiaDespacho,gid) or abort(404)
     confirmado=guia.estado=='Despachada'
     # Un despacho confirmado solo puede ser corregido por un administrador.
-    editable=guia.estado=='Borrador' or (confirmado and usuario_actual().es_admin)
+    editable=guia.estado=='Borrador' or (confirmado and usuario_actual().es_admin and not any(EntregaComponente.query.filter_by(componente_id=i.componente_id).first() for i in guia.items))
     if request.method=='POST':
         if not editable: abort(403)
         try: ids={int(x) for x in request.form.getlist('componentes')}

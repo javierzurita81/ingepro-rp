@@ -144,3 +144,17 @@ header.rp-header{height:auto!important;min-height:0!important;display:block!impo
 .rp-subpanel a:last-child{border-right:0}
 .rp-subpanel a:hover{text-decoration:underline}
 @media(max-width:760px){.rp-header .rp-header-top{padding:8px 12px}.rp-header .brand img{width:110px}.rp-header .brand b{font-size:15px}.rp-header .brand small{font-size:9px}.rp-user-actions .userpill{max-width:100px}.rp-tabs .rp-tab{padding:8px 11px!important}.rp-subnav{padding:8px 12px}.rp-subpanel a{padding:2px 9px}}
+
+/* INGEPRO RP V8.03 - Alineación de pestañas y submenús del encabezado.
+   No afecta estilos ni comportamiento de módulos internos. */
+header.rp-header nav.rp-tab-nav{display:block!important;width:100%!important;max-width:none!important;margin:0!important;padding:0!important;flex:none!important;gap:0!important;align-items:stretch!important;flex-wrap:nowrap!important}
+header.rp-header .rp-tabs{display:flex!important;flex-wrap:nowrap!important;align-items:flex-end!important;justify-content:flex-start!important;gap:4px!important;min-height:46px;margin:0!important;padding:7px clamp(14px,3vw,50px) 0!important;overflow-x:auto;overflow-y:hidden;border-bottom:1px solid #b7c1c9;background:#f0f1f2}
+header.rp-header .rp-tabs .rp-tab{position:relative;top:1px;align-self:flex-end;flex:0 0 auto!important;height:38px!important;min-height:38px!important;margin:0!important;padding:8px 16px!important;line-height:20px!important;vertical-align:bottom;border-radius:9px 9px 0 0!important}
+header.rp-header .rp-tabs .rp-tab.is-active{top:1px;z-index:2;background:#fff!important;border-bottom:1px solid #fff!important}
+header.rp-header .rp-subnav{display:block!important;width:100%!important;min-height:46px!important;margin:0!important;padding:11px clamp(14px,3vw,50px)!important;background:#fff!important;border:0!important;box-sizing:border-box!important}
+header.rp-header .rp-subpanel{display:flex!important;align-items:center!important;justify-content:flex-start!important;gap:0!important;min-height:24px!important;margin:0!important;padding:0!important;width:100%!important}
+header.rp-header .rp-subpanel[hidden]{display:none!important}
+header.rp-header .rp-subpanel a{display:inline-flex!important;align-items:center!important;flex:0 0 auto!important;margin:0!important;padding:2px 14px!important;line-height:20px!important;white-space:nowrap!important}
+header.rp-header .rp-subpanel a:first-child{padding-left:0!important}
+header.rp-header .rp-subpanel a:last-child{border-right:0!important}
+@media(max-width:760px){header.rp-header .rp-tabs{padding-left:12px!important;padding-right:12px!important}header.rp-header .rp-tabs .rp-tab{padding:8px 11px!important}header.rp-header .rp-subnav{padding:9px 12px!important}header.rp-header .rp-subpanel{flex-wrap:wrap!important}header.rp-header .rp-subpanel a{padding:3px 9px!important}}

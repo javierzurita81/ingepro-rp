@@ -222,6 +222,18 @@ class EntregaComponente(db.Model):
     recibido_por=db.Column(db.String(160),nullable=False)
     observacion=db.Column(db.Text)
 
+# INGEPRO RP V8.0: rechazo de recepción del cliente, independiente de la entrega conforme.
+class RechazoEntrega(db.Model):
+    __tablename__='rechazo_entrega'
+    id=db.Column(db.Integer,primary_key=True)
+    componente_id=db.Column(db.Integer,db.ForeignKey('ot_componente.id'),nullable=False,unique=True,index=True)
+    guia_item_id=db.Column(db.Integer,db.ForeignKey('guia_despacho_item.id'),nullable=False)
+    fecha=db.Column(db.Date,nullable=False)
+    cliente_representante=db.Column(db.String(160),nullable=False)
+    motivo=db.Column(db.Text,nullable=False)
+    registrado_por=db.Column(db.Integer,db.ForeignKey('usuario.id'),nullable=False)
+    creado=db.Column(db.DateTime,default=datetime.utcnow,nullable=False)
+
 class DiagnosticoHallazgo(db.Model):
     id=db.Column(db.Integer, primary_key=True)
     ot_id=db.Column(db.Integer, db.ForeignKey('ot.id'), nullable=False, index=True)
@@ -578,6 +590,7 @@ def listado_control_ot():
     for q in cotizaciones:
         por_ot.setdefault(q.ot_id,q)
     planes=set(x[0] for x in db.session.query(PlanActividad.ot_id).filter(PlanActividad.ot_id.in_(ids)).distinct().all()) if ids else set()
+    logistica=estados_logisticos_ots(ots)
     filas=[]
     for o in ots:
         q=por_ot.get(o.id)
@@ -595,7 +608,7 @@ def listado_control_ot():
         elif q: estado='Cotizada'
         elif diag: estado='Diagnosticada'
         else: estado='En diagnóstico'
-        filas.append(dict(ot=o,cot=q,estado=estado,precio=q.neto if q else None))
+        filas.append(dict(ot=o,cot=q,estado=estado,precio=q.neto if q else None,logistica=logistica[o.id]))
     buscar=(request.args.get('buscar') or '').strip().casefold()
     filtro=(request.args.get('estado') or '').strip()
     if buscar:
@@ -888,7 +901,7 @@ def ver_ot(ot_id):
     modelos=ModeloEquipo.query.filter_by(activo=True).order_by(ModeloEquipo.tipo,ModeloEquipo.marca,ModeloEquipo.modelo).all()
     pasos,condicion,q=seguimiento_ot(ot)
     clientes=Cliente.query.filter(db.or_(Cliente.activo.is_(True),Cliente.nombre==ot.cliente)).order_by(Cliente.nombre).all()
-    return render_template('ot.html',ot=ot,modelos=modelos,clientes=clientes,pasos=pasos,condicion=condicion,cot_activa=q)
+    return render_template('ot.html',ot=ot,modelos=modelos,clientes=clientes,pasos=pasos,condicion=condicion,cot_activa=q,logistica=estados_logisticos_ots([ot])[ot.id])
 
 
 @app.route('/ot/<int:ot_id>/agregar-componentes', methods=['POST'])
@@ -2189,19 +2202,34 @@ def gd_disponibles(cliente,guia_id=None):
         ocupados=ocupados.filter(GuiaDespacho.id!=guia_id)
     bloqueados={r[0] for r in ocupados.all()}
     bloqueados.update(r[0] for r in db.session.query(EntregaComponente.componente_id).all())
+    bloqueados.update(r[0] for r in db.session.query(RechazoEntrega.componente_id).all())
     ots=OT.query.filter_by(cliente=cliente).order_by(OT.id.desc()).limit(250).all()
     return [(ot,[c for c in ot.componentes_detalle if (c.condicion_ingreso or '').strip().casefold()=='recibido' and c.id not in bloqueados])
             for ot in ots if not gd_ot_entregada(ot) and gd_informe_terminado(ot)]
 
-# V7.99 — Entrega confirmada manualmente por Administración.
+# INGEPRO RP V8.0 — estados independientes, calculados por componentes recibidos.
+def estados_logisticos_ots(ots):
+    ids=[o.id for o in ots]
+    resultado={}
+    if not ids: return resultado
+    comps=OTComponente.query.filter(OTComponente.ot_id.in_(ids),db.func.lower(OTComponente.condicion_ingreso)=='recibido').all()
+    por_ot={oid:set() for oid in ids}
+    for c in comps: por_ot[c.ot_id].add(c.id)
+    despachados={oid:set() for oid in ids}
+    for ot_id,cid in db.session.query(GuiaDespachoItem.ot_id,GuiaDespachoItem.componente_id).join(GuiaDespacho).filter(GuiaDespacho.estado=='Despachada',GuiaDespachoItem.ot_id.in_(ids)).all():
+        despachados[ot_id].add(cid)
+    todos=set().union(*por_ot.values()) if por_ot else set()
+    entregados={e.componente_id for e in EntregaComponente.query.filter(EntregaComponente.componente_id.in_(todos)).all()} if todos else set()
+    rechazados={r.componente_id for r in RechazoEntrega.query.filter(RechazoEntrega.componente_id.in_(todos)).all()} if todos else set()
+    for oid in ids:
+        recibidos=por_ot[oid]; desp=despachados[oid]&recibidos; conforme=recibidos&entregados; rechazo=recibidos&rechazados
+        despacho='DESPACHADA COMPLETA' if recibidos and desp==recibidos else 'DESPACHADA INCOMPLETA' if desp else 'DESPACHO PENDIENTE'
+        entrega='ENTREGA RECHAZADA POR CLIENTE' if rechazo else 'ENTREGADA COMPLETA' if recibidos and conforme==recibidos else 'ENTREGADA INCOMPLETA' if conforme else 'RECEPCIÓN PENDIENTE'
+        resultado[oid]={'despacho':despacho,'entrega':entrega,'rechazados':len(rechazo),'recibidos':len(recibidos),'despachados':len(desp),'entregados':len(conforme)}
+    return resultado
+
 def entrega_estado_ot(ot):
-    recibidos=[c for c in ot.componentes_detalle if (c.condicion_ingreso or '').strip().casefold()=='recibido']
-    if not recibidos: return 'Sin componentes'
-    entregados={e.componente_id for e in EntregaComponente.query.filter(EntregaComponente.componente_id.in_([c.id for c in recibidos])).all()}
-    if len(entregados)==len(recibidos): return 'ENTREGADA COMPLETA'
-    if entregados: return 'ENTREGADA INCOMPLETA'
-    despachados={i.componente_id for i in GuiaDespachoItem.query.join(GuiaDespacho).filter(GuiaDespacho.estado=='Despachada',GuiaDespachoItem.ot_id==ot.id).all()}
-    return 'DESPACHADA' if despachados else 'PENDIENTE'
+    return estados_logisticos_ots([ot])[ot.id]['entrega']
 
 @app.route('/administracion/control-entregas')
 @permiso_required('entregas')
@@ -2211,13 +2239,16 @@ def control_entregas():
     entregas={e.componente_id:e for e in EntregaComponente.query.filter(EntregaComponente.componente_id.in_(ids)).all()} if ids else {}
     ots={o.id:o for o in OT.query.filter(OT.id.in_({i.ot_id for g in guias for i in g.items})).all()} if guias else {}
     componentes={c.id:c for c in OTComponente.query.filter(OTComponente.id.in_(ids)).all()} if ids else {}
-    return render_template('control_entregas.html',guias=guias,entregas=entregas,ots=ots,componentes=componentes,estados={oid:entrega_estado_ot(ot) for oid,ot in ots.items()},hoy=date.today().isoformat())
+    rechazos={r.componente_id:r for r in RechazoEntrega.query.filter(RechazoEntrega.componente_id.in_(ids)).all()} if ids else {}
+    return render_template('control_entregas.html',guias=guias,entregas=entregas,rechazos=rechazos,ots=ots,componentes=componentes,estados=estados_logisticos_ots(list(ots.values())),hoy=date.today().isoformat())
 
 @app.route('/administracion/control-entregas/<int:item_id>/confirmar',methods=['POST'])
 @permiso_required('entregas')
 def entrega_confirmar(item_id):
     item=db.session.get(GuiaDespachoItem,item_id) or abort(404)
     if item.guia.estado!='Despachada': abort(400)
+    if RechazoEntrega.query.filter_by(componente_id=item.componente_id).first():
+        flash('El componente tiene un rechazo vigente. Administración debe resolverlo antes de confirmar entrega.'); return redirect(url_for('control_entregas'))
     if EntregaComponente.query.filter_by(componente_id=item.componente_id).first():
         flash('Este componente ya fue entregado.'); return redirect(url_for('control_entregas'))
     recibido=(request.form.get('recibido_por') or '').strip()
@@ -2245,6 +2276,38 @@ def entrega_revertir(item_id):
     detalle=f'{item.guia.numero} componente={item.componente_id} entrega={entrega.fecha_entrega} motivo={motivo[:500]}'
     db.session.delete(entrega); db.session.commit(); audit('Entrega revertida por administrador',detalle)
     flash('Entrega revertida; se conserva registro de auditoría.'); return redirect(url_for('control_entregas'))
+
+@app.route('/administracion/control-entregas/<int:item_id>/rechazar',methods=['POST'])
+@permiso_required('entregas')
+def entrega_rechazar(item_id):
+    item=db.session.get(GuiaDespachoItem,item_id) or abort(404)
+    if item.guia.estado!='Despachada': abort(400)
+    if EntregaComponente.query.filter_by(componente_id=item.componente_id).first() or RechazoEntrega.query.filter_by(componente_id=item.componente_id).first():
+        flash('El componente ya tiene recepción o rechazo registrado.'); return redirect(url_for('control_entregas'))
+    representante=(request.form.get('recibido_por') or '').strip()
+    motivo=(request.form.get('motivo') or '').strip()
+    try: fecha=date.fromisoformat(request.form.get('fecha_entrega') or '')
+    except ValueError:
+        flash('Fecha inválida.'); return redirect(url_for('control_entregas'))
+    if not representante or len(motivo)<8 or fecha<item.guia.fecha or fecha>date.today():
+        flash('Indique representante, motivo de al menos 8 caracteres y fecha válida.'); return redirect(url_for('control_entregas'))
+    db.session.add(RechazoEntrega(componente_id=item.componente_id,guia_item_id=item.id,fecha=fecha,cliente_representante=representante[:160],motivo=motivo[:2000],registrado_por=usuario_actual().id))
+    db.session.commit()
+    audit('Entrega rechazada por cliente',f'{item.guia.numero} componente={item.componente_id} representante={representante} motivo={motivo[:500]}')
+    flash('Rechazo registrado; el componente permanece bloqueado para nuevos despachos.'); return redirect(url_for('control_entregas'))
+
+@app.route('/administracion/control-entregas/<int:item_id>/revertir-rechazo',methods=['POST'])
+@permiso_required('entregas')
+def entrega_revertir_rechazo(item_id):
+    if not usuario_actual().es_admin: abort(403)
+    item=db.session.get(GuiaDespachoItem,item_id) or abort(404)
+    rechazo=RechazoEntrega.query.filter_by(componente_id=item.componente_id,guia_item_id=item.id).first() or abort(404)
+    motivo=(request.form.get('motivo') or '').strip()
+    if len(motivo)<8:
+        flash('Indique motivo de corrección de al menos 8 caracteres.'); return redirect(url_for('control_entregas'))
+    db.session.delete(rechazo); db.session.commit()
+    audit('Rechazo revertido por administrador',f'{item.guia.numero} componente={item.componente_id} motivo={motivo[:500]}')
+    flash('Rechazo revertido. Se conserva auditoría.'); return redirect(url_for('control_entregas'))
 
 @app.route('/guias-despacho')
 @permiso_required('despacho')
@@ -2288,7 +2351,7 @@ def guia_editar(gid):
     guia=db.session.get(GuiaDespacho,gid) or abort(404)
     confirmado=guia.estado=='Despachada'
     # Un despacho confirmado solo puede ser corregido por un administrador.
-    editable=guia.estado=='Borrador' or (confirmado and usuario_actual().es_admin and not any(EntregaComponente.query.filter_by(componente_id=i.componente_id).first() for i in guia.items))
+    editable=guia.estado=='Borrador' or (confirmado and usuario_actual().es_admin and not any(EntregaComponente.query.filter_by(componente_id=i.componente_id).first() or RechazoEntrega.query.filter_by(componente_id=i.componente_id).first() for i in guia.items))
     if request.method=='POST':
         if not editable: abort(403)
         try: ids={int(x) for x in request.form.getlist('componentes')}
@@ -2331,7 +2394,9 @@ def guia_estado(gid):
         if any(gd_ot_entregada(db.session.get(OT,i.ot_id)) or not gd_informe_terminado(db.session.get(OT,i.ot_id)) for i in guia.items):
             flash('No se puede despachar: alguna OT está Entregada o no tiene Informe de Salida terminado.'); return redirect(url_for('guia_editar',gid=gid))
         ocupados={r[0] for r in db.session.query(GuiaDespachoItem.componente_id).join(GuiaDespacho).filter(GuiaDespacho.estado=='Despachada').all()}
-        if not guia.items or any(i.componente_id in ocupados for i in guia.items):
+        rechazados={r[0] for r in db.session.query(RechazoEntrega.componente_id).all()}
+        entregados={r[0] for r in db.session.query(EntregaComponente.componente_id).all()}
+        if not guia.items or any(i.componente_id in ocupados or i.componente_id in rechazados or i.componente_id in entregados for i in guia.items):
             flash('Hay componentes ya despachados. Revise antes de confirmar.'); return redirect(url_for('guia_editar',gid=gid))
     guia.estado=accion; db.session.commit(); audit('Estado guía',f'{guia.numero}: {accion}')
     flash('Estado actualizado.'); return redirect(url_for('guia_editar',gid=gid))

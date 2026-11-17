@@ -168,3 +168,25 @@ header.rp-header .rp-tab-nav.rp-home-active .rp-subnav{display:none!important;}
   header.rp-header .rp-tabs{justify-content:flex-start!important;}
   header.rp-header .rp-subpanel{justify-content:flex-start!important;}
 }
+
+/* INGEPRO RP V8.05 — uniformidad visual de pestañas y cuadros del inicio */
+header.rp-header .rp-tabs{max-width:1440px!important;margin-left:auto!important;margin-right:auto!important;justify-content:center!important;gap:5px!important}
+header.rp-header .rp-tabs .rp-tab{font-size:14px!important;font-weight:600!important;min-height:40px!important;height:40px!important;padding:9px 16px!important}
+.module-grid{align-items:stretch;gap:16px}
+.module-grid .module-card{box-sizing:border-box;min-height:155px;height:100%;padding:19px 20px}
+.module-grid .module-card b{font-size:16px!important;line-height:1.25!important;font-weight:700!important;letter-spacing:0!important}
+.module-grid .module-card span{font-size:14px!important;line-height:1.4!important}
+.module-grid .module-card strong{font-size:12px!important;line-height:1.3!important}
+@media(max-width:850px){header.rp-header .rp-tabs{justify-content:flex-start!important}header.rp-header .rp-tabs .rp-tab{font-size:12px!important;padding:8px 11px!important}}
+/* INGEPRO RP V8.05 — selector de visibilidad de precios, solo visual. */
+.ot-compact-panel .ot-table-toolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin:6px 0 9px}
+.ot-compact-panel .ot-table-toolbar .ot-count{margin:0!important}
+.ot-price-control{display:inline-flex;align-items:center;gap:9px;white-space:nowrap}
+.ot-price-label{font-size:12px;font-weight:700;color:#233f51}
+.ot-price-toggle{display:inline-flex;align-items:center;gap:2px;padding:3px;border:1px solid #c8d1d8;border-radius:7px;background:#edf1f4}
+.ot-price-option{appearance:none;border:0!important;box-shadow:none!important;border-radius:5px!important;background:transparent!important;color:#435766!important;cursor:pointer;font-size:11px!important;font-weight:700!important;line-height:1.2!important;padding:7px 10px!important;min-height:29px!important}
+.ot-price-option.is-active{background:#12658a!important;color:#fff!important}
+.ot-price-option:focus-visible{outline:2px solid #12658a;outline-offset:2px}
+.ot-compact-panel.prices-hidden .ot-list-table td.ot-money{font-size:0!important}
+.ot-compact-panel.prices-hidden .ot-list-table td.ot-money::after{content:"••••••";font-size:12px;letter-spacing:2px;color:#637888}
+@media(max-width:650px){.ot-price-control{width:100%;justify-content:flex-end}}

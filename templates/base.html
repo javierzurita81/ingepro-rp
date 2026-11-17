@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>INGEPRO RP · División Maestranza · V8.05</title><link rel="stylesheet" href="{{url_for('static',filename='style.css')}}"></head>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>INGEPRO RP · División Maestranza · V8.06</title><link rel="stylesheet" href="{{url_for('static',filename='style.css')}}"></head>
 <body>
 <header class="rp-header">
   <div class="rp-header-top">
-    <a class="brand" href="{{url_for('index')}}" aria-label="INGEPRO RP - Volver al inicio"><img src="{{url_for('static',filename='img/logo-ingepro-small.png')}}" alt="INGEPRO"><span><b>DIVISIÓN MAESTRANZA</b><small>Reparaciones y Trazabilidad · V8.05</small></span></a>
+    <a class="brand" href="{{url_for('index')}}" aria-label="INGEPRO RP - Volver al inicio"><img src="{{url_for('static',filename='img/logo-ingepro-small.png')}}" alt="INGEPRO"><span><b>DIVISIÓN MAESTRANZA</b><small>Reparaciones y Trazabilidad · V8.06</small></span></a>
     {% if usuario_actual %}<div class="rp-user-actions"><span class="userpill">{{usuario_actual.nombre}} · {{usuario_actual.rol}}</span><a href="{{url_for('logout')}}">Salir</a></div>{% endif %}
   </div>
   {% if usuario_actual %}
@@ -19,28 +19,28 @@
     </div>
     <div class="rp-subnav" aria-label="Opciones de la sección">
       
-      <div class="rp-subpanel" data-rp-panel="ot" hidden>
+      <div class="rp-subpanel rp-subpanel-buttons" data-rp-panel="ot" hidden>
         {% if usuario_actual.puede('ingreso') %}<a href="{{url_for('control_general_ot')}}">Visor de OT</a>{% endif %}
         {% if usuario_actual.puede('planificacion') %}<a href="{{url_for('oti_lista')}}">OT Internas</a>{% endif %}
       </div>
-      <div class="rp-subpanel" data-rp-panel="produccion" hidden>
+      <div class="rp-subpanel rp-subpanel-buttons" data-rp-panel="produccion" hidden>
         {% if usuario_actual.puede('maestros') %}<a href="{{url_for('maestros_equipos')}}">Equipos</a>{% endif %}
         {% if usuario_actual.puede('planificacion') %}<a href="{{url_for('planificacion_gantt')}}">Planificación</a>{% endif %}
         {% if usuario_actual.puede('produccion') %}<a href="{{url_for('produccion')}}">Control de Producción</a>{% endif %}
       </div>
-      <div class="rp-subpanel" data-rp-panel="ingenieria" hidden>
+      <div class="rp-subpanel rp-subpanel-buttons" data-rp-panel="ingenieria" hidden>
         {% if usuario_actual.puede('ingenieria') %}<a href="{{url_for('ingenieria_lista')}}">Informes de Ingeniería</a>{% endif %}
       </div>
-      <div class="rp-subpanel" data-rp-panel="comercial" hidden>
+      <div class="rp-subpanel rp-subpanel-buttons" data-rp-panel="comercial" hidden>
         {% if usuario_actual.puede('clientes') %}<a href="{{url_for('clientes')}}">Clientes</a>{% endif %}
         {% if usuario_actual.puede('cotizaciones') %}<a href="{{url_for('cotizaciones')}}">Cotizaciones</a>{% endif %}
       </div>
-      <div class="rp-subpanel" data-rp-panel="administracion" hidden>
+      <div class="rp-subpanel rp-subpanel-buttons" data-rp-panel="administracion" hidden>
         {% if usuario_actual.puede('entregas') %}<a href="{{url_for('control_entregas')}}">Control de Entregas</a>{% endif %}
         {% if usuario_actual.puede('usuarios') %}<a href="{{url_for('usuarios')}}">Usuarios</a>{% endif %}
         {% if usuario_actual.es_admin %}<a href="{{url_for('limpieza_ot')}}">Reiniciar OT</a><a href="{{url_for('administrar_codigos_componentes')}}">Códigos</a>{% endif %}
       </div>
-      <div class="rp-subpanel" data-rp-panel="gerencia" hidden>
+      <div class="rp-subpanel rp-subpanel-buttons" data-rp-panel="gerencia" hidden>
         {% if usuario_actual.es_admin or usuario_actual.puede('cotizaciones') %}<a href="{{url_for('gerencia')}}">Control de Gerencia</a>{% endif %}
       </div>
     </div>

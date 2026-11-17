@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>INGEPRO RP · División Maestranza · V8.03</title><link rel="stylesheet" href="{{url_for('static',filename='style.css')}}"></head>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>INGEPRO RP · División Maestranza · V8.04</title><link rel="stylesheet" href="{{url_for('static',filename='style.css')}}"></head>
 <body>
 <header class="rp-header">
   <div class="rp-header-top">
-    <a class="brand" href="{{url_for('index')}}" aria-label="INGEPRO RP - Volver al inicio"><img src="{{url_for('static',filename='img/logo-ingepro-small.png')}}" alt="INGEPRO"><span><b>DIVISIÓN MAESTRANZA</b><small>Reparaciones y Trazabilidad · V8.03</small></span></a>
+    <a class="brand" href="{{url_for('index')}}" aria-label="INGEPRO RP - Volver al inicio"><img src="{{url_for('static',filename='img/logo-ingepro-small.png')}}" alt="INGEPRO"><span><b>DIVISIÓN MAESTRANZA</b><small>Reparaciones y Trazabilidad · V8.04</small></span></a>
     {% if usuario_actual %}<div class="rp-user-actions"><span class="userpill">{{usuario_actual.nombre}} · {{usuario_actual.rol}}</span><a href="{{url_for('logout')}}">Salir</a></div>{% endif %}
   </div>
   {% if usuario_actual %}
@@ -18,7 +18,7 @@
       {% if usuario_actual.es_admin or usuario_actual.puede('cotizaciones') %}<button type="button" class="rp-tab" data-rp-tab="gerencia" role="tab" aria-selected="false">Gerencia</button>{% endif %}
     </div>
     <div class="rp-subnav" aria-label="Opciones de la sección">
-      <div class="rp-subpanel" data-rp-panel="inicio"><a href="{{url_for('index')}}">Inicio / Resumen general</a></div>
+      
       <div class="rp-subpanel" data-rp-panel="ot" hidden>
         {% if usuario_actual.puede('ingreso') %}<a href="{{url_for('control_general_ot')}}">Visor de OT</a>{% endif %}
         {% if usuario_actual.puede('planificacion') %}<a href="{{url_for('oti_lista')}}">OT Internas</a>{% endif %}
@@ -53,10 +53,12 @@
 (function(){
   const tabs=Array.from(document.querySelectorAll('.rp-tab[data-rp-tab]'));
   const panels=Array.from(document.querySelectorAll('.rp-subpanel[data-rp-panel]'));
+  const nav=document.querySelector('.rp-tab-nav');
   function activate(name){
     if(!tabs.some(t=>t.dataset.rpTab===name)) name='inicio';
     tabs.forEach(t=>{const selected=t.dataset.rpTab===name;t.classList.toggle('is-active',selected);t.setAttribute('aria-selected',String(selected));t.tabIndex=selected?0:-1;});
     panels.forEach(p=>{p.hidden=p.dataset.rpPanel!==name;});
+    if(nav) nav.classList.toggle('rp-home-active',name==='inicio');
   }
   tabs.forEach(t=>t.addEventListener('click',()=>activate(t.dataset.rpTab)));
   const path=location.pathname.replace(/\/$/,'')||'/';

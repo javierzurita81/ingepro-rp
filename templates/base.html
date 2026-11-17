@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>INGEPRO RP · División Maestranza · V8.02</title><link rel="stylesheet" href="{{url_for('static',filename='style.css')}}"></head>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>INGEPRO RP · División Maestranza · V8.03</title><link rel="stylesheet" href="{{url_for('static',filename='style.css')}}"></head>
 <body>
 <header class="rp-header">
   <div class="rp-header-top">
-    <a class="brand" href="{{url_for('index')}}" aria-label="INGEPRO RP - Volver al inicio"><img src="{{url_for('static',filename='img/logo-ingepro-small.png')}}" alt="INGEPRO"><span><b>DIVISIÓN MAESTRANZA</b><small>Reparaciones y Trazabilidad · V8.02</small></span></a>
+    <a class="brand" href="{{url_for('index')}}" aria-label="INGEPRO RP - Volver al inicio"><img src="{{url_for('static',filename='img/logo-ingepro-small.png')}}" alt="INGEPRO"><span><b>DIVISIÓN MAESTRANZA</b><small>Reparaciones y Trazabilidad · V8.03</small></span></a>
     {% if usuario_actual %}<div class="rp-user-actions"><span class="userpill">{{usuario_actual.nombre}} · {{usuario_actual.rol}}</span><a href="{{url_for('logout')}}">Salir</a></div>{% endif %}
   </div>
   {% if usuario_actual %}
@@ -61,7 +61,9 @@
   tabs.forEach(t=>t.addEventListener('click',()=>activate(t.dataset.rpTab)));
   const path=location.pathname.replace(/\/$/,'')||'/';
   const match=Array.from(document.querySelectorAll('.rp-subpanel a')).find(a=>(new URL(a.href,location.href)).pathname.replace(/\/$/,'')===path);
-  activate(match ? match.closest('[data-rp-panel]').dataset.rpPanel : 'inicio');
+  // La ruta del módulo determina su pestaña, incluso tras recargar la página.
+  const area=match ? match.closest('[data-rp-panel]').dataset.rpPanel : 'inicio';
+  activate(area);
 })();
 </script>
 {% endif %}

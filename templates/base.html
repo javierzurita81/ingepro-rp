@@ -1,1 +1,68 @@
-<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>INGEPRO RP · División Maestranza</title><link rel="stylesheet" href="{{url_for('static',filename='style.css')}}"></head><body><header><a class="brand" href="{{url_for('index')}}"><img src="{{url_for('static',filename='img/logo-ingepro-small.png')}}"><span><b>DIVISIÓN MAESTRANZA</b><small>Reparaciones y Trazabilidad · V8.0</small></span></a>{% if usuario_actual %}<nav><a href="{{url_for('index')}}">Inicio</a>{% if usuario_actual.puede('ingreso') %}<a href="{{url_for('control_general_ot')}}">OT</a>{% endif %}{% if usuario_actual.puede('clientes') %}<a href="{{url_for('clientes')}}">Clientes</a>{% endif %}{% if usuario_actual.puede('cotizaciones') %}<a href="{{url_for('cotizaciones')}}">Cotizaciones</a>{% endif %}{% if usuario_actual.puede('maestros') %}<a href="{{url_for('maestros_equipos')}}">Equipos</a>{% endif %}{% if usuario_actual.puede('planificacion') %}<a href="{{url_for('planificacion_gantt')}}">Planificación</a>{% endif %}{% if usuario_actual.puede('planificacion') %}<a href="{{url_for('oti_lista')}}">OT Internas</a>{% endif %}{% if usuario_actual.es_admin or usuario_actual.puede('cotizaciones') %}<a href="{{url_for('gerencia')}}">Gerencia</a>{% endif %}{% if usuario_actual.puede('produccion') %}<a href="{{url_for('produccion')}}">Producción</a>{% endif %}{% if usuario_actual.puede('ingenieria') %}<a href="{{url_for('ingenieria_lista')}}">INGENIERÍA</a>{% endif %}{% if usuario_actual.puede('entregas') %}<a href="{{url_for('control_entregas')}}">Control de Entregas</a>{% endif %}{% if usuario_actual.puede('usuarios') %}<a href="{{url_for('usuarios')}}">Usuarios</a>{% endif %}{% if usuario_actual.es_admin %}<a href="{{url_for('limpieza_ot')}}">Reiniciar OT</a><a href="{{url_for('administrar_codigos_componentes')}}">Códigos</a>{% endif %}<span class="userpill">{{usuario_actual.nombre}} · {{usuario_actual.rol}}</span><a href="{{url_for('logout')}}">Salir</a></nav>{% endif %}</header><main>{% with ms=get_flashed_messages() %}{% for m in ms %}<div class="flash">{{m}}</div>{% endfor %}{% endwith %}{% block c %}{% endblock %}</main></body></html>
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>INGEPRO RP · División Maestranza · V8.02</title><link rel="stylesheet" href="{{url_for('static',filename='style.css')}}"></head>
+<body>
+<header class="rp-header">
+  <div class="rp-header-top">
+    <a class="brand" href="{{url_for('index')}}" aria-label="INGEPRO RP - Volver al inicio"><img src="{{url_for('static',filename='img/logo-ingepro-small.png')}}" alt="INGEPRO"><span><b>DIVISIÓN MAESTRANZA</b><small>Reparaciones y Trazabilidad · V8.02</small></span></a>
+    {% if usuario_actual %}<div class="rp-user-actions"><span class="userpill">{{usuario_actual.nombre}} · {{usuario_actual.rol}}</span><a href="{{url_for('logout')}}">Salir</a></div>{% endif %}
+  </div>
+  {% if usuario_actual %}
+  <nav class="rp-tab-nav" aria-label="Navegación principal">
+    <div class="rp-tabs" role="tablist" aria-label="Áreas INGEPRO RP">
+      <button type="button" class="rp-tab" data-rp-tab="inicio" role="tab" aria-selected="true">Inicio</button>
+      {% if usuario_actual.puede('ingreso') or usuario_actual.puede('planificacion') %}<button type="button" class="rp-tab" data-rp-tab="ot" role="tab" aria-selected="false">Órdenes de Trabajo</button>{% endif %}
+      {% if usuario_actual.puede('produccion') or usuario_actual.puede('planificacion') or usuario_actual.puede('maestros') %}<button type="button" class="rp-tab" data-rp-tab="produccion" role="tab" aria-selected="false">Producción</button>{% endif %}
+      {% if usuario_actual.puede('ingenieria') %}<button type="button" class="rp-tab" data-rp-tab="ingenieria" role="tab" aria-selected="false">Ingeniería</button>{% endif %}
+      {% if usuario_actual.puede('clientes') or usuario_actual.puede('cotizaciones') %}<button type="button" class="rp-tab" data-rp-tab="comercial" role="tab" aria-selected="false">Comercial</button>{% endif %}
+      {% if usuario_actual.puede('entregas') or usuario_actual.puede('usuarios') or usuario_actual.es_admin %}<button type="button" class="rp-tab" data-rp-tab="administracion" role="tab" aria-selected="false">Administración</button>{% endif %}
+      {% if usuario_actual.es_admin or usuario_actual.puede('cotizaciones') %}<button type="button" class="rp-tab" data-rp-tab="gerencia" role="tab" aria-selected="false">Gerencia</button>{% endif %}
+    </div>
+    <div class="rp-subnav" aria-label="Opciones de la sección">
+      <div class="rp-subpanel" data-rp-panel="inicio"><a href="{{url_for('index')}}">Inicio / Resumen general</a></div>
+      <div class="rp-subpanel" data-rp-panel="ot" hidden>
+        {% if usuario_actual.puede('ingreso') %}<a href="{{url_for('control_general_ot')}}">Visor de OT</a>{% endif %}
+        {% if usuario_actual.puede('planificacion') %}<a href="{{url_for('oti_lista')}}">OT Internas</a>{% endif %}
+      </div>
+      <div class="rp-subpanel" data-rp-panel="produccion" hidden>
+        {% if usuario_actual.puede('maestros') %}<a href="{{url_for('maestros_equipos')}}">Equipos</a>{% endif %}
+        {% if usuario_actual.puede('planificacion') %}<a href="{{url_for('planificacion_gantt')}}">Planificación</a>{% endif %}
+        {% if usuario_actual.puede('produccion') %}<a href="{{url_for('produccion')}}">Control de Producción</a>{% endif %}
+      </div>
+      <div class="rp-subpanel" data-rp-panel="ingenieria" hidden>
+        {% if usuario_actual.puede('ingenieria') %}<a href="{{url_for('ingenieria_lista')}}">Informes de Ingeniería</a>{% endif %}
+      </div>
+      <div class="rp-subpanel" data-rp-panel="comercial" hidden>
+        {% if usuario_actual.puede('clientes') %}<a href="{{url_for('clientes')}}">Clientes</a>{% endif %}
+        {% if usuario_actual.puede('cotizaciones') %}<a href="{{url_for('cotizaciones')}}">Cotizaciones</a>{% endif %}
+      </div>
+      <div class="rp-subpanel" data-rp-panel="administracion" hidden>
+        {% if usuario_actual.puede('entregas') %}<a href="{{url_for('control_entregas')}}">Control de Entregas</a>{% endif %}
+        {% if usuario_actual.puede('usuarios') %}<a href="{{url_for('usuarios')}}">Usuarios</a>{% endif %}
+        {% if usuario_actual.es_admin %}<a href="{{url_for('limpieza_ot')}}">Reiniciar OT</a><a href="{{url_for('administrar_codigos_componentes')}}">Códigos</a>{% endif %}
+      </div>
+      <div class="rp-subpanel" data-rp-panel="gerencia" hidden>
+        {% if usuario_actual.es_admin or usuario_actual.puede('cotizaciones') %}<a href="{{url_for('gerencia')}}">Control de Gerencia</a>{% endif %}
+      </div>
+    </div>
+  </nav>
+  {% endif %}
+</header>
+<main>{% with ms=get_flashed_messages() %}{% for m in ms %}<div class="flash">{{m}}</div>{% endfor %}{% endwith %}{% block c %}{% endblock %}</main>
+{% if usuario_actual %}
+<script>
+(function(){
+  const tabs=Array.from(document.querySelectorAll('.rp-tab[data-rp-tab]'));
+  const panels=Array.from(document.querySelectorAll('.rp-subpanel[data-rp-panel]'));
+  function activate(name){
+    if(!tabs.some(t=>t.dataset.rpTab===name)) name='inicio';
+    tabs.forEach(t=>{const selected=t.dataset.rpTab===name;t.classList.toggle('is-active',selected);t.setAttribute('aria-selected',String(selected));t.tabIndex=selected?0:-1;});
+    panels.forEach(p=>{p.hidden=p.dataset.rpPanel!==name;});
+  }
+  tabs.forEach(t=>t.addEventListener('click',()=>activate(t.dataset.rpTab)));
+  const path=location.pathname.replace(/\/$/,'')||'/';
+  const match=Array.from(document.querySelectorAll('.rp-subpanel a')).find(a=>(new URL(a.href,location.href)).pathname.replace(/\/$/,'')===path);
+  activate(match ? match.closest('[data-rp-panel]').dataset.rpPanel : 'inicio');
+})();
+</script>
+{% endif %}
+</body></html>

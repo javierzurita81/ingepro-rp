@@ -3821,7 +3821,7 @@ def ingenieria_pdf(iid):
     def section(n,name):
         t=Table([[para(n+' | '+name,ParagraphStyle('sec'+n,parent=strong,textColor=white,fontSize=9))]],colWidths=[178*mm])
         t.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),blue),('TOPPADDING',(0,0),(-1,-1),7),('BOTTOMPADDING',(0,0),(-1,-1),7)]))
-        return [Spacer(1,5*mm),t,Spacer(1,2*mm)]
+        return [Spacer(1,2*mm),t,Spacer(1,0.5*mm)]
     def kv(items):
         rows=[]
         for j in range(0,len(items),2):
@@ -3831,19 +3831,19 @@ def ingenieria_pdf(iid):
             if len(pair)==1:row.append('')
             rows.append(row)
         t=Table(rows,colWidths=[89*mm,89*mm],hAlign='LEFT')
-        t.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'TOP'),('LINEBELOW',(0,0),(-1,-1),.35,line),('LEFTPADDING',(0,0),(-1,-1),7),('TOPPADDING',(0,0),(-1,-1),5),('BOTTOMPADDING',(0,0),(-1,-1),5)]))
+        t.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'TOP'),('LINEBELOW',(0,0),(-1,-1),.35,line),('LEFTPADDING',(0,0),(-1,-1),7),('TOPPADDING',(0,0),(-1,-1),2),('BOTTOMPADDING',(0,0),(-1,-1),2)]))
         return t
     def measurements(items):
         rows=[[para('PARÁMETRO',label),para('VALOR REGISTRADO',label)]]+[[para(k),para(v,strong)] for k,v in items]
         t=Table(rows,colWidths=[95*mm,83*mm],repeatRows=1)
-        t.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),pale),('LINEBELOW',(0,0),(-1,-1),.4,line),('VALIGN',(0,0),(-1,-1),'MIDDLE'),('TOPPADDING',(0,0),(-1,-1),6),('BOTTOMPADDING',(0,0),(-1,-1),6)]))
+        t.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),pale),('LINEBELOW',(0,0),(-1,-1),.4,line),('VALIGN',(0,0),(-1,-1),'MIDDLE'),('TOPPADDING',(0,0),(-1,-1),4),('BOTTOMPADDING',(0,0),(-1,-1),4)]))
         return t
     def photo(blob):
         if not blob:return para('SIN FOTOGRAFÍA',center)
         try:
             im=PILImage.open(BytesIO(blob)); im.thumbnail((950,650)); im=im.convert('RGB')
             tmp=BytesIO();im.save(tmp,format='JPEG',quality=78,optimize=True);tmp.seek(0)
-            w,h=im.size;scale=min(79*mm/w,49*mm/h)
+            w,h=im.size;scale=min(79*mm/w,40*mm/h)
             return Image(tmp,width=w*scale,height=h*scale)
         except Exception:return para('FOTOGRAFÍA NO DISPONIBLE',center)
     def header(subtitle):
@@ -3857,6 +3857,17 @@ def ingenieria_pdf(iid):
         t=Table([[mark,[para('INFORME TÉCNICO DE BALANCEO DINÁMICO',strong),para(subtitle,tiny),para(informe.numero,tiny)]]],colWidths=[57*mm,121*mm])
         t.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'MIDDLE'),('ALIGN',(1,0),(1,0),'RIGHT'),('LINEBELOW',(0,0),(-1,-1),2,blue),('BOTTOMPADDING',(0,0),(-1,-1),10)]))
         return t
+    def con_unidad(valor, unidad):
+        """Muestra la unidad solo si existe un valor; no altera los datos guardados."""
+        if valor is None or str(valor).strip() in ('', '—', 'None'):
+            return '—'
+        valor = str(valor).strip()
+        return valor if valor.lower().endswith(' '+unidad.lower()) else valor+' '+unidad
+    def unidad_configurada(valor, clave):
+        # No inventar unidades de RMS: su magnitud puede ser desplazamiento,
+        # velocidad o aceleración, según el instrumento y la medición.
+        unidad = str(d.get(clave+'_unidad') or '').strip()
+        return con_unidad(valor, unidad) if unidad else valor
     story=[header('DIVISIÓN INGENIERÍA'),Spacer(1,3*mm)]
     story.append(kv([('ORDEN DE TRABAJO',ot.numero),('FECHA',informe.fecha.strftime('%d/%m/%Y')),('ESTADO DEL INFORME',informe.estado),('N.º DE INFORME',informe.numero)]))
     story+=section('01','IDENTIFICACIÓN GENERAL')
@@ -3866,11 +3877,10 @@ def ingenieria_pdf(iid):
     f.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'MIDDLE'),('ALIGN',(0,0),(-1,0),'CENTER'),('BOX',(0,0),(-1,-1),.4,line),('INNERGRID',(0,0),(-1,-1),.4,line),('TOPPADDING',(0,0),(-1,0),7),('BOTTOMPADDING',(0,0),(-1,-1),7)]))
     story.append(f)
     story+=section('03','DATOS TÉCNICOS DEL ENSAYO')
-    story.append(kv([('PESO DEL ELEMENTO',d.get('peso_equipo')),('VELOCIDAD (RPM)',d.get('rpm')),('DIÁMETRO',d.get('diametro')),('RADIO DE CORRECCIÓN',d.get('radio')),('PLANOS',d.get('planos')),('N.º ÁLABES',d.get('alabes')),('PESO DE PRUEBA',d.get('peso_prueba')),('AMPLITUD RMS',d.get('rms')),('TIPO DE APOYO',d.get('apoyo'))]))
-    story.append(PageBreak())
-    story.extend([header('RESULTADOS Y CONCLUSIONES')])
+    story.append(kv([('PESO DEL IMPULSOR',con_unidad(d.get('peso_equipo'),'kg')),('VELOCIDAD DE BALANCEO',con_unidad(d.get('rpm'),'rpm')),('DIÁMETRO DEL IMPULSOR',con_unidad(d.get('diametro'),'mm')),('RADIO DE CORRECCIÓN',con_unidad(d.get('radio'),'mm')),('PLANOS',d.get('planos')),('N.º ÁLABES',d.get('alabes')),('PESO DE PRUEBA',con_unidad(d.get('peso_prueba'),'g')),('AMPLITUD RMS',unidad_configurada(d.get('rms'),'rms')),('TIPO DE APOYO',d.get('apoyo'))]))
+    # Flujo continuo: evita una pagina intermedia casi vacia.
     story+=section('04','RESULTADOS DE BALANCEO')
-    story.append(measurements([('DESEQUILIBRIO INICIAL',d.get('desequilibrio_1')),('DESEQUILIBRIO INTERMEDIO 2',d.get('desequilibrio_2')),('DESEQUILIBRIO RESIDUAL REGISTRADO',d.get('desequilibrio_3')),('DESEQUILIBRIO PERMISIBLE',d.get('desequilibrio_permitido')),('GRADO DE CALIDAD',d.get('grado')),('MASA DE CORRECCIÓN',d.get('masa_correccion'))]))
+    story.append(measurements([('DESEQUILIBRIO INICIAL',con_unidad(d.get('desequilibrio_1'),'g.mm')),('DESEQUILIBRIO INTERMEDIO 2',con_unidad(d.get('desequilibrio_2'),'g.mm')),('DESEQUILIBRIO RESIDUAL REGISTRADO',con_unidad(d.get('desequilibrio_3'),'g.mm')),('DESEQUILIBRIO PERMISIBLE',con_unidad(d.get('desequilibrio_permitido'),'g.mm')),('GRADO DE CALIDAD',d.get('grado')),('MASA DE CORRECCIÓN',con_unidad(d.get('masa_correccion'),'g'))]))
     story+=section('05','COMENTARIOS Y REFERENCIA NORMATIVA')
     story.extend([para(d.get('comentarios')),Spacer(1,2*mm),para('NORMA DECLARADA: '+str(d.get('norma') or 'NO INDICADA'),strong)])
     story+=section('06','RECOMENDACIÓN Y CIERRE')
@@ -3878,14 +3888,24 @@ def ingenieria_pdf(iid):
     story+=section('07','RESPONSABLE TÉCNICO')
     if informe.estado=='FINALIZADO' and informe.firma_datos_json:
         firma=json.loads(informe.firma_datos_json)
-        story.append(kv([('NOMBRE',firma.get('nombre')),('PROFESIÓN',firma.get('profesion')),('RUT',firma.get('rut')),('CERTIFICACIÓN',firma.get('categoria')),('REGISTRO ANALISTA DE VIBRACIONES','3894-2026'),('CÓDIGO DE CERTIFICACIÓN',firma.get('codigo')),('FECHA DE FIRMA',informe.firmado_fecha.strftime('%d/%m/%Y %H:%M UTC') if informe.firmado_fecha else '—')]))
+        story.append(kv([('NOMBRE',firma.get('nombre') or 'JAVIER ZURITA ARAYA'),('PROFESIÓN',firma.get('profesion')),('CERTIFICACIÓN',firma.get('categoria')),('REGISTRO ANALISTA DE VIBRACIONES','3894-2026'),('CÓDIGO DE CERTIFICACIÓN',firma.get('codigo')),('FECHA DE FIRMA',informe.firmado_fecha.strftime('%d/%m/%Y %H:%M UTC') if informe.firmado_fecha else '—')]))
     else:
         story.append(para('JAVIER ZURITA ARAYA · INGENIERO MECÁNICO · ANALISTA DE VIBRACIONES · REGISTRO 3894-2026',strong))
         story.append(para('DOCUMENTO EN BORRADOR / EN PROCESO. SIN FIRMA NI APROBACIÓN TÉCNICA.',tiny))
     story+=section('08','PERSONAL DE INSPECCIÓN')
     cells=[]
-    for k,title in [('realizado','REALIZADO POR'),('revisado','REVISADO POR'),('aprobado','APROBADO POR')]:
-        cells.append([para(title,strong),Spacer(1,3*mm),para(d.get(k+'_por')),para(d.get(k+'_cargo'),tiny),Spacer(1,8*mm),para('FIRMA: __________________',tiny)])
+    for k,title in [('realizado','MONTAJE Y BALANCEO ESTÁTICO'),('revisado','REVISADO POR'),('aprobado','APROBADO POR')]:
+        nombre = d.get(k+'_por') or '—'
+        if k == 'aprobado':
+            nombre = 'JAVIER ZURITA ARAYA'
+            cargo = 'INGENIERO MECÁNICO'
+            detalle = 'REG. ANALISTA DE VIBRACIONES 3894-2026'
+        else:
+            cargo = d.get(k+'_cargo') or '—'
+            detalle = None
+        cell=[para(title,strong),Spacer(1,2*mm),para(nombre),para(cargo,tiny)]
+        if detalle: cell.append(para(detalle,tiny))
+        cells.append(cell)
     signatures=Table([cells],colWidths=[178*mm/3]*3)
     signatures.setStyle(TableStyle([('BOX',(0,0),(-1,-1),.4,line),('INNERGRID',(0,0),(-1,-1),.4,line),('VALIGN',(0,0),(-1,-1),'TOP'),('TOPPADDING',(0,0),(-1,-1),8),('BOTTOMPADDING',(0,0),(-1,-1),8)]))
     story.append(signatures)

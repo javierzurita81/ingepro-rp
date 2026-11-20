@@ -20,7 +20,7 @@
  <div class="ot-list-head"><div><h2>INGEPRO RP · Control general de OT</h2><p class="muted">Ingreso · Diagnóstico · Cotización · Reparación · Despacho · Entrega</p></div>
  <div class="ot-list-actions">{% if usuario_actual.puede('ingreso') %}<a class="btn primary ot-compact-btn" href="{{url_for('nueva_ot')}}">+ Nueva OT</a>{% endif %}{% if not es_supervisor %}<a id="ot-excel-link" class="btn secondary ot-compact-btn ot-excel" href="{{url_for('exportar_ot_excel',buscar=buscar,estado=filtro)}}">↓ Excel</a>{% endif %}</div></div>
  <form id="ot-auto-filter" method="get" action="{{url_for('control_general_ot') if solo_ot else url_for('index')}}" class="ot-list-filters">
- <input name="buscar" type="search" value="{{buscar}}" placeholder="Buscar OT, cliente, equipo, cotización..." aria-label="Buscar órdenes de trabajo" autocomplete="off">
+ <input name="buscar" type="search" value="{{buscar}}" placeholder="Buscar OT, N° pieza, guía, OT cliente, equipo, cotización..." aria-label="Buscar órdenes de trabajo" autocomplete="off">
  <select name="estado" aria-label="Filtrar por condición"><option value="">Todos los estados</option>{% for e in ['En diagnóstico','Diagnosticada','Cotizada','Cotización enviada','Aprobada','Cotización rechazada','Planificada','En reparación','Lista para despacho','Despachada','Entregada'] %}<option value="{{e}}" {% if filtro==e %}selected{% endif %}>{{e}}</option>{% endfor %}</select>
  <a class="ot-clear-link" href="{{url_for('control_general_ot') if solo_ot else url_for('index')}}">↻ Limpiar</a></form>
  <div class="ot-table-toolbar"><p class="muted ot-count">{{filas|length}} OT encontradas · Excel respeta los filtros.</p>

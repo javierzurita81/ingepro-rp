@@ -1113,7 +1113,7 @@ def diagnostico_pdf(ot_id):
     from reportlab.lib.enums import TA_CENTER
 
     ot = db.session.get(OT, ot_id) or abort(404)
-    if not salida_aprobada(ot): abort(403)
+    # El diagnóstico puede emitirse antes de la aprobación comercial.
     azul = colors.HexColor('#183e60')
     texto = colors.HexColor('#2b4153')
     suave = colors.HexColor('#e9eff5')

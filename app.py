@@ -1059,7 +1059,7 @@ def diagnostico_foto_eliminar(foto_id):
 def diagnostico_editar(hid):
     h=db.session.get(DiagnosticoHallazgo,hid) or abort(404)
     ot=h.ot
-    if not salida_aprobada(ot): abort(403)
+    # V8.11: diagnóstico editable antes de la aprobación de cotización; permisos conservados.
     if request.method=='POST':
         comp_id=request.form.get('ot_componente_id')
         comp=db.session.get(OTComponente,int(comp_id)) if comp_id else None

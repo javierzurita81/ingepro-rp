@@ -612,7 +612,23 @@ def listado_control_ot():
     buscar=(request.args.get('buscar') or '').strip().casefold()
     filtro=(request.args.get('estado') or '').strip()
     if buscar:
-        filas=[r for r in filas if buscar in ' '.join(str(x or '') for x in (r['ot'].numero,r['ot'].cliente,r['ot'].equipo,r['ot'].componente,r['ot'].serie,r['ot'].ot_cliente if hasattr(r['ot'],'ot_cliente') else '',r['cot'].numero if r['cot'] else '')).casefold()]
+        # V8.07: incluir números de parte y guías (OT y guías internas multi-OT).
+        # Se consultan en lote para no realizar una consulta por cada fila.
+        guias_por_ot={}
+        if ids:
+            guias_vinculadas=(db.session.query(GuiaDespachoItem.ot_id,GuiaDespacho.numero)
+                .join(GuiaDespacho,GuiaDespacho.id==GuiaDespachoItem.guia_id)
+                .filter(GuiaDespachoItem.ot_id.in_(ids)).distinct().all())
+            for ot_id,numero_guia in guias_vinculadas:
+                if numero_guia:
+                    guias_por_ot.setdefault(ot_id,[]).append(numero_guia)
+        def coincide_busqueda(r):
+            o=r['ot'];q=r['cot']
+            campos=(o.numero,o.cliente,o.equipo,o.componente,o.serie,
+                    o.ot_cliente,o.numero_parte,o.numero_identificacion,o.guia,
+                    q.numero if q else '',*guias_por_ot.get(o.id,()))
+            return buscar in ' '.join(str(valor or '') for valor in campos).casefold()
+        filas=[r for r in filas if coincide_busqueda(r)]
     if filtro:
         filas=[r for r in filas if r['estado']==filtro]
     return filas

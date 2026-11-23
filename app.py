@@ -666,15 +666,29 @@ def control_general_ot():
 @app.route('/ot/exportar-excel')
 @permiso_required('ingreso')
 def exportar_ot_excel():
+    # V8.12: exportar los mismos estados logísticos del listado OT.
+    if es_supervisor(): abort(403)
     from openpyxl import Workbook
     from openpyxl.styles import Font,PatternFill,Alignment
     wb=Workbook(); ws=wb.active; ws.title='Control OT'
-    columnas=['OT INGEPRO','Fecha ingreso','Cliente','Equipo','Componente','Serie','OT cliente','Guía despacho','Cotización','Fecha cotización','Precio neto CLP','Estado','Fecha envío cotización','Enviado por','Enviado a','Fecha entrega faena','Recibido por','Revisado faena INGEPRO']
+    columnas=['OT INGEPRO','Fecha ingreso','Cliente','Equipo','Componente','Serie','OT cliente','Guía despacho','Cotización','Fecha cotización','Precio neto CLP','Estado','Fecha envío cotización','Enviado por','Enviado a','Fecha entrega faena','Recibido por','Revisado faena INGEPRO','Condición de despacho','Condición de entrega']
     ws.append(columnas)
     for r in listado_control_ot():
         o=r['ot']; q=r['cot']
-        ws.append([o.numero,o.fecha.date() if o.fecha else None,o.cliente,o.equipo,o.componente,o.serie,getattr(o,'ot_cliente',None),o.guia,q.numero if q else None,q.fecha.date() if q and q.fecha else None,r['precio'],r['estado'],o.fecha_envio_cotizacion,o.enviado_por,o.enviado_a,o.fecha_entrega_faena,o.recibido_por,o.revisado_faena_por])
+        ws.append([o.numero,o.fecha.date() if o.fecha else None,o.cliente,o.equipo,o.componente,o.serie,getattr(o,'ot_cliente',None),o.guia,q.numero if q else None,q.fecha.date() if q and q.fecha else None,r['precio'],r['estado'],o.fecha_envio_cotizacion,o.enviado_por,o.enviado_a,o.fecha_entrega_faena,o.recibido_por,o.revisado_faena_por,r['logistica']['despacho'],r['logistica']['entrega']])
     for c in ws[1]: c.font=Font(bold=True,color='FFFFFF');c.fill=PatternFill('solid',fgColor='17365D');c.alignment=Alignment(wrap_text=True)
+    colores={'DESPACHADA COMPLETA':('E2F0D9','375623'),
+             'ENTREGADA COMPLETA':('E2F0D9','375623'),
+             'DESPACHADA INCOMPLETA':('FFF2CC','805500'),
+             'ENTREGADA INCOMPLETA':('FFF2CC','805500'),
+             'ENTREGA RECHAZADA POR CLIENTE':('FCE4D6','9C0006'),
+             'DESPACHO PENDIENTE':('E7E6E6','595959'),
+             'RECEPCIÓN PENDIENTE':('E7E6E6','595959')}
+    for fila in ws.iter_rows(min_row=2,min_col=19,max_col=20) if ws.max_row>1 else ():
+        for c in fila:
+            fondo,letra=colores.get(c.value,('FFFFFF','000000'))
+            c.fill=PatternFill('solid',fgColor=fondo)
+            c.font=Font(color=letra)
     for col in ws.columns:
         letter=col[0].column_letter
         ws.column_dimensions[letter].width=min(38,max(15,max(len(str(c.value or '')) for c in col[:100])+2))

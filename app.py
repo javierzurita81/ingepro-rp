@@ -221,6 +221,7 @@ class EntregaComponente(db.Model):
     fecha_registro=db.Column(db.DateTime,default=datetime.utcnow,nullable=False)
     recibido_por=db.Column(db.String(160),nullable=False)
     observacion=db.Column(db.Text)
+    guia_sii=db.Column(db.String(40))
 
 # INGEPRO RP V8.0: rechazo de recepción del cliente, independiente de la entrega conforme.
 class RechazoEntrega(db.Model):
@@ -501,6 +502,9 @@ def asegurar_columnas():
     # Migración ligera para instalaciones V4 existentes: create_all no agrega columnas nuevas.
     from sqlalchemy import inspect, text
     insp=inspect(db.engine)
+    if 'entrega_componente' in insp.get_table_names():
+        cols={c['name'] for c in insp.get_columns('entrega_componente')}
+        if 'guia_sii' not in cols: db.session.execute(text('ALTER TABLE entrega_componente ADD COLUMN guia_sii VARCHAR(40)'))
     if 'usuario' in insp.get_table_names():
         cols={c['name'] for c in insp.get_columns('usuario')}
         defs={'rut':'VARCHAR(20)','email':'VARCHAR(140)','sigla':'VARCHAR(10)','color':'VARCHAR(20)','disponible_planificacion':'BOOLEAN DEFAULT FALSE','ing_profesion':'VARCHAR(100)','ing_categoria':'VARCHAR(80)','ing_certificacion':'VARCHAR(100)','ing_firma_autorizada':'BOOLEAN DEFAULT FALSE'}
@@ -2289,10 +2293,33 @@ def entrega_confirmar(item_id):
         flash('Fecha de entrega inválida.'); return redirect(url_for('control_entregas'))
     if fecha<item.guia.fecha or fecha>date.today():
         flash('La fecha de entrega debe estar entre el despacho y hoy.'); return redirect(url_for('control_entregas'))
-    db.session.add(EntregaComponente(componente_id=item.componente_id,guia_item_id=item.id,confirmado_por=usuario_actual().id,fecha_entrega=fecha,recibido_por=recibido[:160],observacion=(request.form.get('observacion') or '').strip()[:1000]))
+    guia_sii=(request.form.get('guia_sii') or '').strip()
+    if guia_sii and not re.fullmatch(r'[0-9]{1,40}',guia_sii):
+        flash('La guía SII debe contener solo números (máximo 40).'); return redirect(url_for('control_entregas'))
+    db.session.add(EntregaComponente(guia_sii=guia_sii or None,componente_id=item.componente_id,guia_item_id=item.id,confirmado_por=usuario_actual().id,fecha_entrega=fecha,recibido_por=recibido[:160],observacion=(request.form.get('observacion') or '').strip()[:1000]))
     db.session.commit()
-    audit('Entrega confirmada',f'{item.guia.numero} componente={item.componente_id} recibe={recibido} fecha={fecha}')
+    audit('Entrega confirmada',f'{item.guia.numero} componente={item.componente_id} recibe={recibido} fecha={fecha} guia_sii={guia_sii}')
     flash('Entrega confirmada. El componente queda excluido de futuros despachos.'); return redirect(url_for('control_entregas'))
+
+@app.route('/administracion/control-entregas/<int:item_id>/editar',methods=['POST'])
+@permiso_required('entregas')
+def entrega_editar(item_id):
+    item=db.session.get(GuiaDespachoItem,item_id) or abort(404)
+    if item.guia.estado!='Despachada': abort(400)
+    entrega=EntregaComponente.query.filter_by(componente_id=item.componente_id,guia_item_id=item.id).with_for_update().first() or abort(404)
+    recibido=(request.form.get('recibido_por') or '').strip()
+    guia=(request.form.get('guia_sii') or '').strip()
+    try: fecha=date.fromisoformat(request.form.get('fecha_entrega') or '')
+    except ValueError:
+        flash('Fecha de entrega inválida.'); return redirect(url_for('control_entregas'))
+    if not recibido or len(recibido)>160 or fecha<item.guia.fecha or fecha>date.today() or (guia and not re.fullmatch(r'[0-9]{1,40}',guia)):
+        flash('Revise el nombre, fecha y número de guía SII.'); return redirect(url_for('control_entregas'))
+    anterior={'guia_sii':entrega.guia_sii,'recibido_por':entrega.recibido_por,'fecha':entrega.fecha_entrega.isoformat()}
+    nuevo={'guia_sii':guia or None,'recibido_por':recibido,'fecha':fecha.isoformat()}
+    if anterior!=nuevo:
+        entrega.guia_sii=guia or None; entrega.recibido_por=recibido; entrega.fecha_entrega=fecha
+        audit('Datos de entrega modificados',json.dumps({'guia_interna':item.guia.numero,'componente':item.componente_id,'anterior':anterior,'nuevo':nuevo},ensure_ascii=False))
+    flash('Datos de entrega guardados sin cambiar su estado.'); return redirect(url_for('control_entregas'))
 
 @app.route('/administracion/control-entregas/<int:item_id>/revertir',methods=['POST'])
 @permiso_required('entregas')

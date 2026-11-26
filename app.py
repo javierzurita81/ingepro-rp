@@ -585,6 +585,28 @@ def login():
 @app.route('/logout')
 def logout(): session.clear(); return redirect(url_for('login'))
 
+# V8.10: filtros y etiquetas del visor, sin modificar estados persistidos.
+OT_FILTROS_LOGISTICOS = {
+    'Despachada completa': ('despacho', 'DESPACHADA COMPLETA'),
+    'Despachada incompleta': ('despacho', 'DESPACHADA INCOMPLETA'),
+    'Entrega conforme completa': ('entrega', 'ENTREGADA COMPLETA'),
+    'Entrega conforme incompleta': ('entrega', 'ENTREGADA INCOMPLETA'),
+}
+
+def ot_coincide_estado(fila, filtro):
+    if filtro in OT_FILTROS_LOGISTICOS:
+        campo, valor = OT_FILTROS_LOGISTICOS[filtro]
+        return fila['logistica'][campo] == valor
+    return fila['estado'] == filtro
+
+def ot_etiqueta_logistica(valor):
+    return {'ENTREGADA COMPLETA': 'Entrega conforme completa',
+            'ENTREGADA INCOMPLETA': 'Entrega conforme incompleta'}.get(valor, valor.capitalize())
+
+@app.template_filter('ot_etiqueta_logistica')
+def ot_etiqueta_logistica_template(valor):
+    return ot_etiqueta_logistica(valor)
+
 def listado_control_ot():
     """Listado administrativo de OT con los mismos filtros para pantalla y Excel."""
     ots=OT.query.order_by(OT.id.desc()).all()
@@ -634,7 +656,7 @@ def listado_control_ot():
             return buscar in ' '.join(str(valor or '') for valor in campos).casefold()
         filas=[r for r in filas if coincide_busqueda(r)]
     if filtro:
-        filas=[r for r in filas if r['estado']==filtro]
+        filas=[r for r in filas if ot_coincide_estado(r, filtro)]
     return filas
 
 @app.route('/')
@@ -679,15 +701,15 @@ def exportar_ot_excel():
     ws.append(columnas)
     for r in listado_control_ot():
         o=r['ot']; q=r['cot']
-        ws.append([o.numero,o.fecha.date() if o.fecha else None,o.cliente,o.equipo,o.componente,o.serie,getattr(o,'ot_cliente',None),o.guia,q.numero if q else None,q.fecha.date() if q and q.fecha else None,r['precio'],r['estado'],o.fecha_envio_cotizacion,o.enviado_por,o.enviado_a,o.fecha_entrega_faena,o.recibido_por,o.revisado_faena_por,r['logistica']['despacho'],r['logistica']['entrega']])
+        ws.append([o.numero,o.fecha.date() if o.fecha else None,o.cliente,o.equipo,o.componente,o.serie,getattr(o,'ot_cliente',None),o.guia,q.numero if q else None,q.fecha.date() if q and q.fecha else None,r['precio'],r['estado'],o.fecha_envio_cotizacion,o.enviado_por,o.enviado_a,o.fecha_entrega_faena,o.recibido_por,o.revisado_faena_por,ot_etiqueta_logistica(r['logistica']['despacho']),ot_etiqueta_logistica(r['logistica']['entrega'])])
     for c in ws[1]: c.font=Font(bold=True,color='FFFFFF');c.fill=PatternFill('solid',fgColor='17365D');c.alignment=Alignment(wrap_text=True)
-    colores={'DESPACHADA COMPLETA':('E2F0D9','375623'),
-             'ENTREGADA COMPLETA':('E2F0D9','375623'),
-             'DESPACHADA INCOMPLETA':('FFF2CC','805500'),
-             'ENTREGADA INCOMPLETA':('FFF2CC','805500'),
-             'ENTREGA RECHAZADA POR CLIENTE':('FCE4D6','9C0006'),
-             'DESPACHO PENDIENTE':('E7E6E6','595959'),
-             'RECEPCIÓN PENDIENTE':('E7E6E6','595959')}
+    colores={'Despachada completa':('DDEBF7','2457CE'),
+             'Entrega conforme completa':('E2F0D9','375623'),
+             'Despachada incompleta':('FFF2CC','805500'),
+             'Entrega conforme incompleta':('FFF2CC','805500'),
+             'Entrega rechazada por cliente':('FCE4D6','9C0006'),
+             'Despacho pendiente':('E7E6E6','595959'),
+             'Recepción pendiente':('E7E6E6','595959')}
     for fila in ws.iter_rows(min_row=2,min_col=19,max_col=20) if ws.max_row>1 else ():
         for c in fila:
             fondo,letra=colores.get(c.value,('FFFFFF','000000'))
